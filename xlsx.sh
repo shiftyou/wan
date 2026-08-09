@@ -1,1 +1,1 @@
-.venv/bin/python update_xlsx.py
+.venv/bin/python list_updator.py

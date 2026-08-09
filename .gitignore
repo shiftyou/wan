@@ -7,3 +7,9 @@ records.csv
 완성형_홍보환자_리스트.xlsx
 photo/
 qr_codes/
+qr_generator_config.json
+qr_classifier_config.json
+list_updator_config.json
+build/
+dist/
+*.spec
