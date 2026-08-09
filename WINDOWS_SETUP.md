@@ -5,9 +5,11 @@ Windows PC(네트워크 드라이브 `Z:` 기준)에서 설치하고, `qr_classi
 로그인할 때마다 자동으로 실행되게 설정하는 방법을 설명합니다.
 
 `qr_generator.py`, `qr_classifier.py`, `list_updator.py` 모두 화면(GUI)이 있는
-프로그램입니다. Python 설치 없이 쓰고 싶다면 exe로 빌드된 버전(`QR_Generator.exe`,
-`QR_Classifier.exe`, `List_Updator.exe`)을 그대로 복사해서 실행해도 됩니다 —
-이 경우 1~3단계(Python 설치, 가상환경)는 건너뛰어도 됩니다.
+프로그램입니다. Python 설치 없이 쓰고 싶다면 exe로 빌드된 버전을 그대로
+복사해서 실행해도 됩니다 — 이 경우 1~3단계(Python 설치, 가상환경)는
+건너뛰어도 됩니다. 권장 배포 형태는 `dist/PatientTools` 폴더(exe 3개가
+`_internal` 폴더 하나를 공유, 빌드 방법은 7번 참고)이며, 이 폴더 전체를
+그대로 옮기면 됩니다.
 
 ## 0. 폴더 구조
 
@@ -127,43 +129,59 @@ exe는 Windows에서만 빌드할 수 있습니다(PyInstaller는 크로스 컴�
 결과물이 생기며, 이 폴더는 git에 올라가지 않으니 배포할 땐 여기서 직접
 복사해서 씁니다.
 
-1. 가상환경에 PyInstaller를 한 번 설치합니다.
+0. 가상환경에 PyInstaller를 한 번 설치합니다.
 
    ```bat
    .venv\Scripts\pip install pyinstaller
    ```
 
-2. `qr_generator.py`, `list_updator.py`는 평범하게 빌드합니다.
+### 권장 방법: 세 도구를 한 폴더로 묶어서 빌드 (`patient_tools.spec`)
 
-   ```bat
-   .venv\Scripts\pyinstaller --onefile --windowed --name QR_Generator qr_generator.py
-   .venv\Scripts\pyinstaller --onefile --windowed --name List_Updator list_updator.py
-   ```
+`--onefile`은 실행할 때마다 임시 폴더에 압축을 풀기 때문에 창이 뜨는 데
+시간이 걸립니다. `--onedir`(폴더형)은 이 과정이 없어 훨씬 빠르지만, 세
+도구를 각각 onedir로 만들면 opencv/numpy 같은 무거운 의존성이 도구마다
+중복 저장되어 용량이 커집니다(따로 만들면 합쳐서 약 350MB, 아래 방법은
+약 225MB).
 
-3. `qr_classifier.py`는 QR 인식 폴백으로 쓰는 `pyzbar`가 zbar 네이티브 DLL을
-   ctypes로 런타임에 로드하는 방식이라, PyInstaller가 자동으로 못 챙깁니다.
-   `--add-binary`로 DLL 두 개를 exe 안 `pyzbar/` 경로에 명시적으로 넣어줘야
-   합니다. 먼저 DLL이 있는 pyzbar 패키지 폴더를 확인합니다.
+저장소에 있는 `patient_tools.spec`은 PyInstaller의 "Multi-Package Bundle"
+기능(`MERGE()`)으로 세 스크립트를 하나의 `_internal` 폴더를 공유하도록
+묶어 빌드합니다. 결과물은 `dist/PatientTools/` 안에 `QR_Generator.exe`,
+`QR_Classifier.exe`, `List_Updator.exe`가 같은 폴더에, `_internal/`을
+공유하는 형태로 생깁니다.
 
-   ```bat
-   .venv\Scripts\python -c "import pyzbar, os; print(os.path.dirname(pyzbar.__file__))"
-   ```
+`patient_tools.spec` 안의 `PYZBAR_DIR` 값(pyzbar 네이티브 DLL 위치)은
+빌드하는 컴퓨터의 실제 경로로 맞춰야 합니다. 확인 방법:
 
-   그 경로를 아래 `<PYZBAR_DIR>` 자리에 넣어 빌드합니다(Windows에서는
-   `--add-binary`의 구분자가 `;`입니다).
+```bat
+.venv\Scripts\python -c "import pyzbar, os; print(os.path.dirname(pyzbar.__file__))"
+```
 
-   ```bat
-   .venv\Scripts\pyinstaller --onefile --windowed --name QR_Classifier ^
-     --add-binary "<PYZBAR_DIR>\libzbar-64.dll;pyzbar" ^
-     --add-binary "<PYZBAR_DIR>\libiconv.dll;pyzbar" ^
-     qr_classifier.py
-   ```
+경로를 확인해 `.spec` 파일의 `PYZBAR_DIR` 줄을 수정한 뒤 빌드합니다.
 
-   이 단계를 빠뜨리면 exe 실행 시 pyzbar가 조용히 비활성화되어(cv2만 동작)
-   기울어지거나 흐린 QR의 인식률이 떨어집니다 — 크래시는 안 나지만 인식률만
-   낮아지므로 눈치채기 어렵습니다. 빌드 후 반드시 회전/블러가 있는 QR 사진으로
-   한 번 테스트해 보는 것을 권장합니다.
+```bat
+.venv\Scripts\pyinstaller patient_tools.spec
+```
 
-4. 소스 코드를 고칠 때마다 해당 exe를 다시 빌드해야 반영됩니다. `build/`
-   폴더는 캐시 용도라 지워도 되고, `*.spec` 파일도 다음 빌드 때 자동으로
-   다시 생깁니다.
+빌드 후에는 회전되었거나 흐린 QR 사진으로 `QR_Classifier.exe`를 한 번
+테스트해 보세요 — pyzbar DLL이 제대로 안 들어가면 크래시 없이 인식률만
+조용히 떨어져서 눈치채기 어렵습니다.
+
+배포할 땐 `dist/PatientTools` **폴더 전체**를 옮겨야 합니다(`_internal`
+없이 exe만 옮기면 실행이 안 됩니다).
+
+### 개별 빌드 (도구 하나만 필요할 때)
+
+```bat
+.venv\Scripts\pyinstaller --onefile --windowed --name QR_Generator qr_generator.py
+.venv\Scripts\pyinstaller --onefile --windowed --name List_Updator list_updator.py
+.venv\Scripts\pyinstaller --onefile --windowed --name QR_Classifier ^
+  --add-binary "<PYZBAR_DIR>\libzbar-64.dll;pyzbar" ^
+  --add-binary "<PYZBAR_DIR>\libiconv.dll;pyzbar" ^
+  qr_classifier.py
+```
+
+`--onefile`은 exe 파일 하나만 옮기면 되는 대신 실행할 때마다 압축을 풀어서
+느립니다. 빠른 실행이 필요하면 위 "권장 방법"을 쓰세요.
+
+소스 코드를 고칠 때마다 해당 exe(또는 `patient_tools.spec` 빌드 전체)를
+다시 빌드해야 반영됩니다. `build/` 폴더는 캐시 용도라 지워도 됩니다.

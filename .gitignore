@@ -13,3 +13,4 @@ list_updator_config.json
 build/
 dist/
 *.spec
+!patient_tools.spec
