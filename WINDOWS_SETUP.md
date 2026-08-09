@@ -119,3 +119,51 @@ QR 이미지 하단에 페이로드를 한글로 표시하기 위해 Windows 기
   트리거를 "시스템 시작 시"로, "사용자 로그온 여부와 관계없이 실행"으로
   등록하는 방법도 있지만, 관리자 권한과 계정 비밀번호 저장이 필요해서
   기본으로는 위 시작프로그램 방식을 권장합니다.
+
+## 7. exe 빌드 방법 (개발자용)
+
+exe는 Windows에서만 빌드할 수 있습니다(PyInstaller는 크로스 컴파일을 지원하지
+않음 — Mac/Linux에서 빌드하면 그 OS용 실행파일만 나옵니다). `dist/` 폴더에
+결과물이 생기며, 이 폴더는 git에 올라가지 않으니 배포할 땐 여기서 직접
+복사해서 씁니다.
+
+1. 가상환경에 PyInstaller를 한 번 설치합니다.
+
+   ```bat
+   .venv\Scripts\pip install pyinstaller
+   ```
+
+2. `qr_generator.py`, `list_updator.py`는 평범하게 빌드합니다.
+
+   ```bat
+   .venv\Scripts\pyinstaller --onefile --windowed --name QR_Generator qr_generator.py
+   .venv\Scripts\pyinstaller --onefile --windowed --name List_Updator list_updator.py
+   ```
+
+3. `qr_classifier.py`는 QR 인식 폴백으로 쓰는 `pyzbar`가 zbar 네이티브 DLL을
+   ctypes로 런타임에 로드하는 방식이라, PyInstaller가 자동으로 못 챙깁니다.
+   `--add-binary`로 DLL 두 개를 exe 안 `pyzbar/` 경로에 명시적으로 넣어줘야
+   합니다. 먼저 DLL이 있는 pyzbar 패키지 폴더를 확인합니다.
+
+   ```bat
+   .venv\Scripts\python -c "import pyzbar, os; print(os.path.dirname(pyzbar.__file__))"
+   ```
+
+   그 경로를 아래 `<PYZBAR_DIR>` 자리에 넣어 빌드합니다(Windows에서는
+   `--add-binary`의 구분자가 `;`입니다).
+
+   ```bat
+   .venv\Scripts\pyinstaller --onefile --windowed --name QR_Classifier ^
+     --add-binary "<PYZBAR_DIR>\libzbar-64.dll;pyzbar" ^
+     --add-binary "<PYZBAR_DIR>\libiconv.dll;pyzbar" ^
+     qr_classifier.py
+   ```
+
+   이 단계를 빠뜨리면 exe 실행 시 pyzbar가 조용히 비활성화되어(cv2만 동작)
+   기울어지거나 흐린 QR의 인식률이 떨어집니다 — 크래시는 안 나지만 인식률만
+   낮아지므로 눈치채기 어렵습니다. 빌드 후 반드시 회전/블러가 있는 QR 사진으로
+   한 번 테스트해 보는 것을 권장합니다.
+
+4. 소스 코드를 고칠 때마다 해당 exe를 다시 빌드해야 반영됩니다. `build/`
+   폴더는 캐시 용도라 지워도 되고, `*.spec` 파일도 다음 빌드 때 자동으로
+   다시 생깁니다.
