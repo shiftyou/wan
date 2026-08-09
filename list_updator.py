@@ -229,6 +229,8 @@ def update_excel(target_dir: Path, excel_path: Path, log) -> int:
         current_row += 1
         added_count += 1
         existing_keys.add(pat_key)
+        date_display = date_obj.strftime("%Y-%m-%d") if date_obj else "날짜 없음"
+        log(f"  추가: [{pat['type']}] {pat['name']} / {pat['surgery']} / {date_display}")
 
     wb.save(excel_path)
     if added_count > 0:
