@@ -189,7 +189,7 @@ ERROR_COLOR = "#c0392b"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 DEFAULT_WORK_DIR = Path(os.environ.get("WORK_DIR", str(BASE_DIR / "qr_codes")))
 
-INITIAL_WINDOW_SIZE = (1500, 1050)
+INITIAL_WINDOW_SIZE = (870, 600)
 
 ENTRY_KWARGS = dict(
     font=UI_FONT, relief="flat", highlightthickness=1,
