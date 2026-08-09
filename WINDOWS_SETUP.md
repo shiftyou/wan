@@ -57,18 +57,23 @@ python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 ```
 
-## 4. 각 스크립트 실행
+## 4. 각 프로그램 실행
 
-macOS의 `qr.sh`/`qr_classifier.sh`/`xlsx.sh` 대신 Windows용 `.bat` 파일을 씁니다.
-`Z:\99_사진작업폴더`에서 더블클릭하거나 명령 프롬프트에서 실행합니다.
-(exe 버전을 쓴다면 `.bat` 대신 `QR_Generator.exe`/`QR_Classifier.exe`/
-`List_Updator.exe`를 바로 더블클릭하면 됩니다.)
+exe 버전을 쓴다면 `dist/PatientTools` 폴더(또는 개별 exe)의 실행파일을
+더블클릭하면 됩니다. 소스로 실행한다면 `Z:\99_사진작업폴더`에서 명령
+프롬프트를 열고 아래처럼 `pythonw.exe`로 실행합니다(콘솔 창 없이 뜹니다).
 
-- `qr.bat` — QR 코드 생성기 화면 실행 (환자 정보 입력, QR 생성/찾기)
-- `qr_classifier.bat` — 사진 자동 분류기 화면 실행. 창을 열면 바로 감시가 시작되고,
+```bat
+.venv\Scripts\pythonw.exe qr_generator.py
+.venv\Scripts\pythonw.exe qr_classifier.py
+.venv\Scripts\pythonw.exe list_updator.py
+```
+
+- `qr_generator.py` — QR 코드 생성기 화면 (환자 정보 입력, QR 생성/찾기)
+- `qr_classifier.py` — 사진 자동 분류기 화면. 창을 열면 바로 감시가 시작되고,
   진행 상황이 창 안 로그 영역에 실시간으로 표시됩니다("감시 중지" 버튼으로
   멈출 수 있습니다).
-- `xlsx.bat` — 홍보 환자 엑셀 백필 화면 실행 (기존 폴더 일괄 백필용, 평소엔
+- `list_updator.py` — 홍보 환자 엑셀 백필 화면 (기존 폴더 일괄 백필용, 평소엔
   `qr_classifier.py`가 세션 시작 시점에 자동으로 등록하므로 수동 실행할 필요는
   거의 없음). 대상 폴더/엑셀 파일을 지정하고 "실행" 버튼을 누르면 됩니다.
 
@@ -97,8 +102,15 @@ QR 이미지 하단에 페이로드를 한글로 표시하기 위해 Windows 기
    열립니다.
 3. 아래 둘 중 하나의 바로가기를 그 폴더에 만듭니다.
    - exe 버전: `QR_Classifier.exe`
-   - 소스 버전: `qr_classifier.bat` (내부적으로 `pythonw.exe`로 실행되어 콘솔 창이
-     뜨지 않습니다)
+   - 소스 버전: 새 바로가기를 만들고 대상(Target)을 아래처럼 지정합니다
+     (`pythonw.exe`라 콘솔 창이 뜨지 않습니다).
+
+     ```
+     "Z:\99_사진작업폴더\.venv\Scripts\pythonw.exe" "Z:\99_사진작업폴더\qr_classifier.py"
+     ```
+
+     설정/기록 파일은 스크립트 파일 위치를 기준으로 잡으므로, 바로가기의
+     "시작 위치(Start in)"는 어디로 되어 있어도 상관없습니다.
 4. 다음 로그인부터는 이 바로가기가 자동 실행되어 `qr_classifier.py`
    화면이 뜨고, 체크박스를 켜 뒀으므로 바로 감시를 시작합니다.
 
