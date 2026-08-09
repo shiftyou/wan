@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+current_session.json
+records.csv
+완성형_홍보환자_리스트.xlsx
+photo/
+qr_codes/
