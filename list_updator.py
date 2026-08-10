@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """폴더명만 보고 홍보 환자 엑셀을 일괄 백필한다 (GUI).
 
-대상 폴더 아래 있는 세션 폴더명(``홍보여부_이름_수술명_수술날짜`` 등)을 분석해
+대상 폴더 아래 ``이름`` 또는 ``홍보여부_이름`` 상위 폴더 안의 세션 폴더명
+(``홍보여부_이름_수술명_수술날짜`` 등)을 분석해
 HP/HT 환자 중 엑셀에 아직 없는 사람을 찾아 새 행으로 추가한다. 평소엔
 qr_classifier.py가 세션 시작 시점에 자동으로 등록하므로, 이 도구는 과거에
 누락된 폴더를 나중에 한 번에 채워 넣을 때만 쓰면 된다.
@@ -124,13 +125,19 @@ def update_excel(target_dir: Path, excel_path: Path, log) -> int:
 
     log("폴더 스캔 중...")
     new_patients = []
-    for item in os.listdir(target_dir):
-        if item.startswith("_"):
+    for parent_name in os.listdir(target_dir):
+        if parent_name.startswith("_"):
             continue
-        if (target_dir / item).is_dir():
-            parsed = parse_folder_name(item)
-            if parsed and parsed["type"] in ("HP", "HT"):
-                new_patients.append(parsed)
+        parent_dir = target_dir / parent_name
+        if not parent_dir.is_dir():
+            continue
+        for item in os.listdir(parent_dir):
+            if item.startswith("_"):
+                continue
+            if (parent_dir / item).is_dir():
+                parsed = parse_folder_name(item)
+                if parsed and parsed["type"] in ("HP", "HT"):
+                    new_patients.append(parsed)
 
     log(f"스캔 완료: 총 {len(new_patients)}명의 홍보 환자 후보 발견.")
 

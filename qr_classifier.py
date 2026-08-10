@@ -7,9 +7,9 @@
 * QR이 없는 사진: 현재 세션의 폴더로 이동한다.
 * 세션이 없을 때 들어온 사진 또는 알 수 없는 QR: ``_미분류``으로 이동한다.
 
-QR에는 환자 정보가 들어가며, 사진은 분류 대상 폴더의 ``홍보여부_이름_수술명_수술날짜``
-세션 폴더 아래 ``홍보여부_이름_경과일`` 서브폴더(수술날짜 기준 촬영일 경과일수)에
-저장된다.
+QR에는 환자 정보가 들어가며, 사진은 분류 대상 폴더의 ``홍보여부_이름`` (일반은 ``이름``)
+상위 폴더 아래 ``홍보여부_이름_수술명_수술날짜`` 세션 폴더, 그 아래 다시
+``홍보여부_이름_경과일`` 서브폴더(수술날짜 기준 촬영일 경과일수)에 저장된다.
 
 분류/이동 전에 원본 사진은 항상 원본 백업 폴더의 ``년/년월/년월일/`` 아래에
 원본 파일명 그대로 복사되어 보관된다.
@@ -132,6 +132,16 @@ def build_session_folder(info: dict[str, str]) -> str:
         raw = f"{info['이름']}_{info['수술명']}_{info['수술날짜']}"
     else:
         raw = f"{info['홍보여부']}_{info['이름']}_{info['수술명']}_{info['수술날짜']}"
+    return folder_name(raw)
+
+
+def build_session_parent_folder(info: dict[str, str]) -> str:
+    """세션 폴더를 담는 상위 폴더명(이름, 또는 홍보구분_이름)을 만든다.
+    같은 환자의 여러 세션 폴더를 한 상위 폴더 아래 모아 두기 위함이다."""
+    if info["홍보여부"] == "일반":
+        raw = info["이름"]
+    else:
+        raw = f"{info['홍보여부']}_{info['이름']}"
     return folder_name(raw)
 
 
@@ -435,14 +445,15 @@ def process_image(detector, image_path: Path, current_session: dict | None,
     if payload:
         info = parse_session_payload(payload)
         if info:
+            parent_folder = build_session_parent_folder(info)
             session_folder = build_session_folder(info)
-            marker_dir = photo_dir / "_세션마커" / session_folder
+            marker_dir = photo_dir / "_세션마커" / parent_folder / session_folder
             safe_move(image_path, marker_dir)
             write_info(marker_dir, info)
-            write_info(photo_dir / session_folder, info)
+            write_info(photo_dir / parent_folder / session_folder, info)
             if current_session and current_session["folder"] != session_folder:
                 log(f"  이전 환자 종료: {current_session['folder']}")
-            log(f"  새로운 환자 시작: {session_folder}")
+            log(f"  새로운 환자 시작: {parent_folder}/{session_folder}")
             append_excel_row(info, excel_path, log)
             return {"folder": session_folder, "info": info}
 
@@ -451,11 +462,12 @@ def process_image(detector, image_path: Path, current_session: dict | None,
         return current_session
 
     if current_session:
+        parent_folder = build_session_parent_folder(current_session["info"])
         subfolder = build_elapsed_subfolder(current_session["info"], image_path)
         destination = move_with_sequence(
-            image_path, photo_dir / current_session["folder"] / subfolder, subfolder
+            image_path, photo_dir / parent_folder / current_session["folder"] / subfolder, subfolder
         )
-        log(f"  사진 저장: {current_session['folder']}/{subfolder}/{destination.name}")
+        log(f"  사진 저장: {parent_folder}/{current_session['folder']}/{subfolder}/{destination.name}")
         return current_session
 
     safe_move(image_path, photo_dir / "_미분류")
