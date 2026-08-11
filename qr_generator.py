@@ -12,7 +12,7 @@ import sys
 import tkinter as tk
 from datetime import date
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 try:
     from tkcalendar import DateEntry
@@ -132,17 +132,26 @@ def append_record(promo: str, name: str, surgery: str, surgery_date: str) -> Non
         writer.writerow([date.today().isoformat(), promo, name, surgery, surgery_date])
 
 
-def create_session(promo: str, name: str, surgery: str, surgery_date: str, output_dir: Path) -> Path:
-    payload = (
+def build_payload(promo: str, name: str, surgery: str, surgery_date: str) -> str:
+    return (
         f"{name}_{surgery}_{surgery_date}"
         if promo == "일반"
         else f"{promo}_{name}_{surgery}_{surgery_date}"
     )
+
+
+def create_session(promo: str, name: str, surgery: str, surgery_date: str, output_dir: Path) -> Path:
+    payload = build_payload(promo, name, surgery, surgery_date)
     filename_base = safe_filename(payload)
     qr_path = output_dir / f"{filename_base}.png"
     make_qr(payload, qr_path)
     append_record(promo, name, surgery, surgery_date)
     return qr_path
+
+
+def session_qr_path(info: dict, output_dir: Path) -> Path:
+    payload = build_payload(info["홍보여부"], info["이름"], info["수술명"], info["수술날짜"])
+    return output_dir / f"{safe_filename(payload)}.png"
 
 
 def find_patient_photos(base_dir: Path, promo: str, name: str) -> list[Path]:
@@ -155,6 +164,48 @@ def find_patient_photos(base_dir: Path, promo: str, name: str) -> list[Path]:
         path for path in base_dir.rglob("*")
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS and path.name.startswith(prefix)
     )
+
+
+def parse_session_folder_name(folder_name: str) -> dict | None:
+    """qr_classifier.py가 만드는 세션 폴더명([홍보여부_]이름_수술명_수술날짜)을 해석한다.
+    QR 페이로드와 동일한 형식이므로 규칙도 그대로 따른다."""
+    parts = folder_name.split("_")
+    if len(parts) == 4:
+        promo, name, surgery, surgery_date = parts
+        if promo not in PROMO_CHOICES:
+            return None
+    elif len(parts) == 3:
+        promo = "일반"
+        name, surgery, surgery_date = parts
+    else:
+        return None
+    if not name or not surgery or not SESSION_DATE_RE.fullmatch(surgery_date):
+        return None
+    return {"홍보여부": promo, "이름": name, "수술명": surgery, "수술날짜": surgery_date}
+
+
+def find_session_folders(source_dir: Path) -> list[dict]:
+    """source_dir/상위폴더(이름 또는 홍보여부_이름)/세션폴더 구조에서 세션 폴더명이
+    QR 페이로드 형식과 일치하는 항목을 찾아 정보와 경로를 함께 반환한다."""
+    results: list[dict] = []
+    if not source_dir.is_dir():
+        return results
+    for parent_name in sorted(os.listdir(source_dir)):
+        if parent_name.startswith("_"):
+            continue
+        parent_dir = source_dir / parent_name
+        if not parent_dir.is_dir():
+            continue
+        for item_name in sorted(os.listdir(parent_dir)):
+            if item_name.startswith("_"):
+                continue
+            item_dir = parent_dir / item_name
+            if not item_dir.is_dir():
+                continue
+            info = parse_session_folder_name(item_name)
+            if info:
+                results.append({**info, "path": item_dir})
+    return results
 
 
 def resize_to_fit(image, box_width: int, box_height: int):
@@ -188,6 +239,9 @@ ERROR_COLOR = "#c0392b"
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 DEFAULT_WORK_DIR = Path(os.environ.get("WORK_DIR", str(BASE_DIR / "qr_codes")))
+DEFAULT_SCAN_DIR = Path(os.environ.get("SCAN_DIR", r"Z:\01_환자이름별사진"))
+
+SESSION_DATE_RE = re.compile(r"^\d{6}$")
 
 INITIAL_WINDOW_SIZE = (870, 600)
 
@@ -256,6 +310,11 @@ class QRGeneratorApp(tk.Tk):
         self.work_dir_var = tk.StringVar(value=self._config.get("work_dir") or str(DEFAULT_WORK_DIR))
         self.work_dir_var.trace_add("write", self._schedule_save_work_dir)
 
+        # 폴더에서 QR 생성 탭이 스캔할 소스 디렉토리도 마지막 값을 기억해 둔다.
+        self._scan_dir_save_after_id = None
+        self.scan_dir_var = tk.StringVar(value=self._config.get("scan_dir") or str(DEFAULT_SCAN_DIR))
+        self.scan_dir_var.trace_add("write", self._schedule_save_scan_dir)
+
         self._apply_style()
         self._build_ui()
         self.minsize(*INITIAL_WINDOW_SIZE)
@@ -271,6 +330,16 @@ class QRGeneratorApp(tk.Tk):
         self._config["work_dir"] = self.work_dir_var.get().strip()
         save_config(self._config)
 
+    def _schedule_save_scan_dir(self, *_args) -> None:
+        if self._scan_dir_save_after_id:
+            self.after_cancel(self._scan_dir_save_after_id)
+        self._scan_dir_save_after_id = self.after(500, self._save_scan_dir)
+
+    def _save_scan_dir(self) -> None:
+        self._scan_dir_save_after_id = None
+        self._config["scan_dir"] = self.scan_dir_var.get().strip()
+        save_config(self._config)
+
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
@@ -280,11 +349,14 @@ class QRGeneratorApp(tk.Tk):
 
         generate_tab = ttk.Frame(notebook)
         search_tab = ttk.Frame(notebook)
+        batch_tab = ttk.Frame(notebook)
         notebook.add(generate_tab, text="QR 생성")
         notebook.add(search_tab, text="QR 찾기")
+        notebook.add(batch_tab, text="폴더에서 생성")
 
         self._build_generate_tab(generate_tab)
         self._build_search_tab(search_tab)
+        self._build_batch_tab(batch_tab)
 
     def _apply_style(self) -> None:
         # 입력창과 QR 라벨(malgun.ttf)의 한글 렌더링을 통일한다.
@@ -687,6 +759,184 @@ class QRGeneratorApp(tk.Tk):
         photo = ImageTk.PhotoImage(fitted)
         self._search_preview_image = photo  # 참조를 유지하지 않으면 가비지 컬렉션으로 사라진다.
         self.search_preview_label.configure(image=photo, text="")
+
+    def _build_batch_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        outer = ttk.Frame(parent, padding=24)
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.columnconfigure(0, weight=2)
+        outer.columnconfigure(1, weight=1)
+        outer.rowconfigure(3, weight=1)
+
+        ttk.Label(outer, text="폴더에서 QR 일괄 생성", style="Header.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(
+            outer,
+            text="이미 촬영이 시작된 폴더(홍보구분_이름/세션 또는 이름/세션 구조)에서\n"
+                 "'홍보구분_이름_수술명_수술날짜' 또는 '이름_수술명_수술날짜' 형식의 세션 폴더를 찾아 QR을 만듭니다.",
+            style="Muted.TLabel", justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 16))
+
+        source_frame = ttk.LabelFrame(outer, text="소스 디렉토리", padding=(16, 14))
+        source_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+        source_frame.columnconfigure(0, weight=1)
+
+        tk.Entry(source_frame, textvariable=self.scan_dir_var, **ENTRY_KWARGS).grid(
+            row=0, column=0, sticky="ew", padx=(0, 10))
+        ttk.Button(source_frame, text="찾아보기", style="Secondary.TButton",
+                   command=self._browse_scan_dir).grid(row=0, column=1)
+        ttk.Button(source_frame, text="스캔", style="Accent.TButton",
+                   command=self._on_scan_sessions).grid(row=0, column=2, padx=(10, 0))
+
+        list_frame = ttk.LabelFrame(outer, text="찾은 세션 폴더", padding=(10, 10))
+        list_frame.grid(row=3, column=0, sticky="nsew", pady=(16, 0), padx=(0, 12))
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        # 체크박스처럼 동작하도록 tk의 기본 다중 선택(Ctrl/Shift+클릭) 대신
+        # 클릭 한 번으로 개별 항목을 토글하는 self._checked 배열로 선택 상태를 관리한다.
+        self.batch_listbox = tk.Listbox(
+            list_frame, font=UI_FONT, activestyle="none", selectmode=tk.BROWSE, exportselection=False,
+            width=48, relief="flat", highlightthickness=1, highlightbackground=BORDER_COLOR,
+            bg=CARD_COLOR, fg=TEXT_COLOR, selectbackground=CARD_COLOR, selectforeground=TEXT_COLOR,
+        )
+        self.batch_listbox.grid(row=0, column=0, sticky="nsew")
+        self.batch_listbox.bind("<Button-1>", self._on_batch_item_click)
+        self.batch_listbox.bind("<space>", self._on_batch_item_toggle_key)
+        batch_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.batch_listbox.yview)
+        batch_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.batch_listbox.configure(yscrollcommand=batch_scrollbar.set)
+
+        batch_btn_frame = ttk.Frame(list_frame)
+        batch_btn_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        ttk.Button(batch_btn_frame, text="전체 선택", style="Secondary.TButton",
+                   command=self._select_all_sessions).pack(side="left")
+        ttk.Button(batch_btn_frame, text="선택 해제", style="Secondary.TButton",
+                   command=self._deselect_all_sessions).pack(side="left", padx=(6, 0))
+        ttk.Button(batch_btn_frame, text="QR생성", style="Accent.TButton",
+                   command=self._on_generate_selected_sessions).pack(side="right")
+
+        log_frame = ttk.LabelFrame(outer, text="실행 로그", padding=(10, 10))
+        log_frame.grid(row=3, column=1, sticky="nsew", pady=(16, 0))
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+
+        # ScrolledText의 기본 width(80칸)가 목록(48칸)보다 넓어 2:1 비율이 뒤집히므로
+        # 로그 쪽 너비를 목록보다 좁게 명시한다.
+        self.batch_log_text = scrolledtext.ScrolledText(
+            log_frame, font=UI_FONT, wrap="word", state="disabled", width=24,
+            bg=CARD_COLOR, fg=TEXT_COLOR, relief="flat", highlightthickness=1,
+            highlightbackground=BORDER_COLOR,
+        )
+        self.batch_log_text.grid(row=0, column=0, sticky="nsew")
+
+        self._scan_sessions: list[dict] = []
+        self._checked: list[bool] = []
+
+    def _browse_scan_dir(self) -> None:
+        initial = self.scan_dir_var.get().strip() or str(DEFAULT_SCAN_DIR)
+        selected = filedialog.askdirectory(initialdir=initial, title="소스 디렉토리 선택")
+        if selected:
+            self.scan_dir_var.set(selected)
+
+    def _append_batch_log(self, message: str) -> None:
+        self.batch_log_text.configure(state="normal")
+        self.batch_log_text.insert("end", message + "\n")
+        self.batch_log_text.see("end")
+        self.batch_log_text.configure(state="disabled")
+
+    def _format_batch_item(self, index: int) -> str:
+        info = self._scan_sessions[index]
+        box = "☑" if self._checked[index] else "☐"
+        label = f"{box}  [{info['홍보여부']}] {info['이름']} · {info['수술명']} · {info['수술날짜']}"
+        if info.get("_qr_exists"):
+            label += "  (이미 생성됨)"
+        return label
+
+    def _refresh_batch_item(self, index: int) -> None:
+        was_active = self.batch_listbox.index("active") == index
+        self.batch_listbox.delete(index)
+        self.batch_listbox.insert(index, self._format_batch_item(index))
+        if was_active:
+            self.batch_listbox.activate(index)
+
+    def _on_batch_item_click(self, event) -> str:
+        index = self.batch_listbox.nearest(event.y)
+        if not self._scan_sessions or index < 0 or index >= len(self._scan_sessions):
+            return "break"
+        self._checked[index] = not self._checked[index]
+        self._refresh_batch_item(index)
+        return "break"
+
+    def _on_batch_item_toggle_key(self, _event) -> str:
+        index = self.batch_listbox.index("active")
+        if not self._scan_sessions or index < 0 or index >= len(self._scan_sessions):
+            return "break"
+        self._checked[index] = not self._checked[index]
+        self._refresh_batch_item(index)
+        return "break"
+
+    def _select_all_sessions(self) -> None:
+        for index in range(len(self._checked)):
+            self._checked[index] = True
+            self._refresh_batch_item(index)
+
+    def _deselect_all_sessions(self) -> None:
+        for index in range(len(self._checked)):
+            self._checked[index] = False
+            self._refresh_batch_item(index)
+
+    def _on_scan_sessions(self) -> None:
+        source_dir = Path(self.scan_dir_var.get().strip() or DEFAULT_SCAN_DIR)
+        self.batch_listbox.delete(0, tk.END)
+        self._scan_sessions = find_session_folders(source_dir)
+        self._checked = [False] * len(self._scan_sessions)
+
+        self.batch_log_text.configure(state="normal")
+        self.batch_log_text.delete("1.0", "end")
+        self.batch_log_text.configure(state="disabled")
+
+        if not self._scan_sessions:
+            self._append_batch_log(f"'{source_dir}' 아래에서 일치하는 세션 폴더를 찾지 못했습니다.")
+            return
+
+        output_dir = Path(self.work_dir_var.get().strip() or DEFAULT_WORK_DIR)
+        for index, info in enumerate(self._scan_sessions):
+            info["_qr_exists"] = session_qr_path(info, output_dir).exists()
+            self.batch_listbox.insert(tk.END, self._format_batch_item(index))
+
+        self._append_batch_log(f"{len(self._scan_sessions)}개의 세션 폴더를 찾았습니다.")
+
+    def _on_generate_selected_sessions(self) -> None:
+        selected_indexes = [i for i, checked in enumerate(self._checked) if checked]
+        if not selected_indexes:
+            messagebox.showinfo("선택 필요", "QR을 생성할 세션 폴더를 목록에서 체크하세요.")
+            return
+
+        output_dir_str = self.work_dir_var.get().strip()
+        if not output_dir_str:
+            messagebox.showerror("입력 오류", "저장 위치를 지정하세요.")
+            return
+        output_dir = Path(output_dir_str)
+
+        created = 0
+        for index in selected_indexes:
+            info = self._scan_sessions[index]
+            try:
+                qr_path = create_session(
+                    info["홍보여부"], info["이름"], info["수술명"], info["수술날짜"], output_dir
+                )
+            except RuntimeError as exc:
+                self._append_batch_log(f"[실패] {info['이름']}: {exc}")
+                continue
+            created += 1
+            self._append_batch_log(f"[생성] {qr_path.name}")
+
+        self._append_batch_log(f"완료: {created}/{len(selected_indexes)}개 생성됨.")
+        if created:
+            self._on_scan_sessions()
+        messagebox.showinfo("QR 생성 완료", f"{len(selected_indexes)}개 중 {created}개의 QR을 생성했습니다.")
 
 
 def _enable_windows_dpi_awareness() -> None:

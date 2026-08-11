@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import tkinter as tk
@@ -247,6 +248,59 @@ def update_excel(target_dir: Path, excel_path: Path, log) -> int:
     return added_count
 
 
+def build_parent_folder_name(parsed: dict) -> str:
+    """세션 폴더가 들어가야 할 상위 폴더명(이름, 또는 홍보구분_이름)을 만든다."""
+    if parsed["type"] == "일반":
+        return parsed["name"]
+    return f"{parsed['type']}_{parsed['name']}"
+
+
+def find_stray_session_dirs(target_dir: Path) -> list[dict]:
+    """target_dir 바로 아래 놓인 세션 폴더(원래는 상위 폴더 아래 있어야 하는데,
+    예전에 만들어져 대상 폴더 바로 밑에 있는 폴더)를 찾는다."""
+    results = []
+    if not target_dir.is_dir():
+        return results
+    for item_name in sorted(os.listdir(target_dir)):
+        if item_name.startswith("_"):
+            continue
+        item_dir = target_dir / item_name
+        if not item_dir.is_dir():
+            continue
+        parsed = parse_folder_name(item_name)
+        if parsed:
+            results.append({"name": item_name, "path": item_dir, "parsed": parsed})
+    return results
+
+
+def organize_target_dir(target_dir: Path, log) -> int:
+    """target_dir 바로 아래의 세션 폴더를 상위 폴더(이름 또는 홍보구분_이름) 아래로
+    옮긴다. 폴더 내용은 지우지 않고 폴더 자체만 그대로 이동한다."""
+    stray_dirs = find_stray_session_dirs(target_dir)
+    if not stray_dirs:
+        log("[안내] 정리할 폴더가 없습니다.")
+        return 0
+
+    moved_count = 0
+    for entry in stray_dirs:
+        parent_name = build_parent_folder_name(entry["parsed"])
+        destination_parent = target_dir / parent_name
+        destination = destination_parent / entry["name"]
+        if destination.exists():
+            log(f"[건너뜀] 이미 존재함: {parent_name}/{entry['name']}")
+            continue
+        destination_parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(entry["path"]), str(destination))
+        moved_count += 1
+        log(f"[이동] {entry['name']} -> {parent_name}/{entry['name']}")
+
+    if moved_count > 0:
+        log(f"[성공] 총 {moved_count}개 폴더를 정리했습니다.")
+    else:
+        log("[안내] 실제로 이동된 폴더가 없습니다.")
+    return moved_count
+
+
 # ==========================================
 # 화면
 # ==========================================
@@ -371,9 +425,13 @@ class ListUpdatorApp(tk.Tk):
                                    command=self._run_update)
         self.run_btn.grid(row=0, column=0, sticky="w")
 
+        self.organize_btn = ttk.Button(control_frame, text="폴더 정리", style="Secondary.TButton",
+                                        command=self._run_organize)
+        self.organize_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
+
         self.status_var = tk.StringVar(value="대기 중")
         self.status_label = ttk.Label(control_frame, textvariable=self.status_var, style="Muted.TLabel")
-        self.status_label.grid(row=0, column=1, sticky="w", padx=(16, 0))
+        self.status_label.grid(row=0, column=2, sticky="w", padx=(16, 0))
 
         log_frame = ttk.LabelFrame(outer, text="실행 로그", padding=(10, 10))
         log_frame.grid(row=4, column=0, sticky="nsew", pady=(8, 0))
@@ -442,6 +500,7 @@ class ListUpdatorApp(tk.Tk):
 
         self._log_queue = Queue()
         self.run_btn.configure(state="disabled")
+        self.organize_btn.configure(state="disabled")
         self._set_status("실행 중", tone="success")
 
         self._worker_thread = threading.Thread(
@@ -458,6 +517,99 @@ class ListUpdatorApp(tk.Tk):
         except Exception as error:
             log_put(f"[오류] 실행 중 문제가 발생했습니다: {error}")
 
+    def _show_organize_confirm_dialog(self, stray_dirs: list[dict]) -> bool:
+        """messagebox는 스크롤이 안 되어 폴더가 많으면 창이 화면 밖으로 길어지므로,
+        스크롤 가능한 목록을 가진 별도 확인 창을 띄운다."""
+        dialog = tk.Toplevel(self)
+        dialog.title("폴더 정리 확인")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        dialog.configure(bg=BG_COLOR)
+
+        result = {"confirmed": False}
+
+        ttk.Label(
+            dialog,
+            text=f"대상 폴더 바로 아래의 {len(stray_dirs)}개 폴더를 상위 폴더(이름 또는 "
+                 f"홍보구분_이름) 아래로 옮깁니다.\n폴더 내용은 삭제 없이 그대로 이동됩니다.",
+            style="Muted.TLabel", justify="left", wraplength=440,
+        ).pack(padx=16, pady=(16, 10), anchor="w")
+
+        list_text = scrolledtext.ScrolledText(
+            dialog, width=56, height=14, font=UI_FONT, wrap="word", state="normal",
+            bg=CARD_COLOR, fg=TEXT_COLOR, relief="flat", highlightthickness=1,
+            highlightbackground=BORDER_COLOR,
+        )
+        list_text.pack(padx=16, pady=(0, 10), fill="both", expand=True)
+        list_text.insert("1.0", "\n".join(f"- {entry['name']}" for entry in stray_dirs))
+        list_text.configure(state="disabled")
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(padx=16, pady=(0, 16), fill="x")
+
+        def on_confirm() -> None:
+            result["confirmed"] = True
+            dialog.destroy()
+
+        def on_cancel() -> None:
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="취소", style="Secondary.TButton", command=on_cancel).pack(side="right")
+        ttk.Button(btn_frame, text="정리 시작", style="Accent.TButton",
+                   command=on_confirm).pack(side="right", padx=(0, 8))
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+
+        dialog.update_idletasks()
+        width, height = dialog.winfo_width(), dialog.winfo_height()
+        x = self.winfo_rootx() + (self.winfo_width() - width) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - height) // 3
+        dialog.geometry(f"+{x}+{y}")
+
+        self.wait_window(dialog)
+        return result["confirmed"]
+
+    def _run_organize(self) -> None:
+        if self._worker_thread and self._worker_thread.is_alive():
+            return
+
+        target_dir = self.target_dir_var.get().strip()
+        if not target_dir:
+            messagebox.showerror("입력 오류", "대상 폴더를 지정하세요.")
+            return
+        target_path = Path(target_dir)
+
+        stray_dirs = find_stray_session_dirs(target_path)
+        if not stray_dirs:
+            messagebox.showinfo("정리할 폴더 없음", "대상 폴더 바로 아래에 정리할 세션 폴더가 없습니다.")
+            return
+
+        if not self._show_organize_confirm_dialog(stray_dirs):
+            return
+
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.configure(state="disabled")
+
+        self._log_queue = Queue()
+        self.run_btn.configure(state="disabled")
+        self.organize_btn.configure(state="disabled")
+        self._set_status("정리 중", tone="success")
+
+        self._worker_thread = threading.Thread(
+            target=self._organize_worker,
+            args=(target_path, self._log_queue.put),
+            daemon=True,
+        )
+        self._worker_thread.start()
+        self._poll_log_queue()
+
+    def _organize_worker(self, target_dir: Path, log_put) -> None:
+        try:
+            organize_target_dir(target_dir, log_put)
+        except Exception as error:
+            log_put(f"[오류] 실행 중 문제가 발생했습니다: {error}")
+
     def _poll_log_queue(self) -> None:
         while True:
             try:
@@ -470,6 +622,7 @@ class ListUpdatorApp(tk.Tk):
             self.after(200, self._poll_log_queue)
         else:
             self.run_btn.configure(state="normal")
+            self.organize_btn.configure(state="normal")
             self._set_status("완료", tone="muted")
 
     def _append_log(self, message: str) -> None:
