@@ -9,10 +9,13 @@
 
 QR에는 환자 정보가 들어가며, 사진은 분류 대상 폴더의 ``홍보여부_이름`` (일반은 ``이름``)
 상위 폴더 아래 ``홍보여부_이름_수술명_수술날짜`` 세션 폴더, 그 아래 다시
-``홍보여부_이름_경과일`` 서브폴더(수술날짜 기준 촬영일 경과일수)에 저장된다.
+``홍보여부_이름_수술명_경과일`` 서브폴더(수술날짜 기준 촬영일 경과일수)에
+``홍보여부_이름_수술명_경과일_순번`` 파일명으로 저장된다.
 
-분류/이동 전에 원본 사진은 항상 원본 백업 폴더의 ``년/년월/년월일/`` 아래에
-원본 파일명 그대로 복사되어 보관된다.
+분류/이동 전에 원본 사진은 항상 원본 백업 폴더의 ``년/년월/년월일/`` 아래에도
+그대로 보관된다. 이 날짜 폴더 아래에는 분류 대상 폴더와 동일하게
+``홍보구분_이름/세션 폴더/경과일 서브폴더`` 구조 및 파일명으로도 다시 정리되어
+저장된다(세션을 시작하는 QR 사진은 원본 파일명 그대로 세션 폴더까지만).
 
 감시 폴더/분류 대상 폴더/원본 백업 폴더는 화면에서 바로 바꿀 수 있고, 마지막으로
 쓴 값이 qr_classifier_config.json에 저장되어 다음 실행 때도 불러온다.
@@ -147,14 +150,15 @@ def build_session_parent_folder(info: dict[str, str]) -> str:
 
 def build_elapsed_subfolder(info: dict[str, str], image_path: Path) -> str:
     """수술날짜 기준으로 사진이 찍힌 날짜까지의 경과일 서브폴더명을 만든다.
+    이 이름은 그 안에 저장되는 사진 파일명의 접두어(+ 순번)로도 그대로 쓰인다.
     QR과 동일하게 홍보여부가 '일반'이면 표기하지 않는다."""
     photo_date = datetime.fromtimestamp(image_path.stat().st_mtime).date()
     surgery_date = datetime.strptime(info["수술날짜"], "%y%m%d").date()
     elapsed_days = (photo_date - surgery_date).days
     if info["홍보여부"] == "일반":
-        raw = f"{info['이름']}_#{elapsed_days}"
+        raw = f"{info['이름']}_{info['수술명']}_#{elapsed_days}"
     else:
-        raw = f"{info['홍보여부']}_{info['이름']}_#{elapsed_days}"
+        raw = f"{info['홍보여부']}_{info['이름']}_{info['수술명']}_#{elapsed_days}"
     return folder_name(raw)
 
 
@@ -171,8 +175,12 @@ def safe_move(source: Path, destination_dir: Path) -> Path:
     return destination
 
 
-def backup_original(image_path: Path, backup_dir: Path) -> None:
-    """분류/이동 전에 원본 사진을 backup_dir/YYYY/YYYY-MM/YYYY-MM-DD/ 아래에 복사해 둔다."""
+def backup_original(image_path: Path, backup_dir: Path, relative_subdir: Path | None = None,
+                     filename: str | None = None) -> None:
+    """분류/이동 전에 원본 사진을 backup_dir/YYYY/YYYY-MM/YYYY-MM-DD/[relative_subdir/] 아래에 복사해 둔다.
+    relative_subdir을 주면 분류 대상 폴더(photo_dir)에 실제로 저장되는 홍보구분_이름/세션폴더/경과일폴더
+    구조와 동일하게 날짜 폴더 아래에도 그대로 맞춘다. filename을 주면 원본 파일명 대신 그 이름을
+    쓴다 (분류 대상 폴더에 실제로 저장되는 순번 파일명과 맞추기 위함)."""
     photo_date = datetime.fromtimestamp(image_path.stat().st_mtime)
     dated_dir = (
         backup_dir
@@ -180,10 +188,13 @@ def backup_original(image_path: Path, backup_dir: Path) -> None:
         / photo_date.strftime("%Y-%m")
         / photo_date.strftime("%Y-%m-%d")
     )
+    if relative_subdir:
+        dated_dir = dated_dir / relative_subdir
     dated_dir.mkdir(parents=True, exist_ok=True)
-    destination = dated_dir / image_path.name
+    name = filename or image_path.name
+    destination = dated_dir / name
     if destination.exists():
-        stem, suffix = image_path.stem, image_path.suffix
+        stem, suffix = Path(name).stem, Path(name).suffix
         index = 1
         while destination.exists():
             destination = dated_dir / f"{stem}_{index}{suffix}"
@@ -191,21 +202,20 @@ def backup_original(image_path: Path, backup_dir: Path) -> None:
     shutil.copy2(image_path, destination)
 
 
-def move_with_sequence(source: Path, destination_dir: Path, base_name: str) -> Path:
-    """대상 폴더명 + 순번으로 파일명을 바꿔서 옮긴다 (예: 일반_이름_#7_1.jpg)."""
-    destination_dir.mkdir(parents=True, exist_ok=True)
+def next_sequence_filename(destination_dir: Path, base_name: str, suffix: str) -> str:
+    """destination_dir 안에 이미 있는 ``base_name_숫자`` 꼴 파일들을 보고 다음 순번
+    파일명을 만든다 (예: 일반_이름_수술명_#7_1.jpg)."""
     index = 1
     if destination_dir.exists():
         for item in destination_dir.iterdir():
             match = re.fullmatch(rf"{re.escape(base_name)}_(\d+)", item.stem)
             if match:
                 index = max(index, int(match.group(1)) + 1)
-    destination = destination_dir / f"{base_name}_{index}{source.suffix}"
-    while destination.exists():
+    filename = f"{base_name}_{index}{suffix}"
+    while (destination_dir / filename).exists():
         index += 1
-        destination = destination_dir / f"{base_name}_{index}{source.suffix}"
-    shutil.move(str(source), str(destination))
-    return destination
+        filename = f"{base_name}_{index}{suffix}"
+    return filename
 
 
 def _detect_qr(detector, image) -> str | None:
@@ -439,7 +449,6 @@ def append_excel_row(info: dict[str, str], excel_path: Path, log) -> None:
 
 def process_image(detector, image_path: Path, current_session: dict | None,
                    photo_dir: Path, backup_dir: Path, excel_path: Path, log) -> dict | None:
-    backup_original(image_path, backup_dir)
     payload = decode_qr(detector, image_path)
 
     if payload:
@@ -447,6 +456,7 @@ def process_image(detector, image_path: Path, current_session: dict | None,
         if info:
             parent_folder = build_session_parent_folder(info)
             session_folder = build_session_folder(info)
+            backup_original(image_path, backup_dir, Path(parent_folder) / session_folder)
             marker_dir = photo_dir / "_세션마커" / parent_folder / session_folder
             safe_move(image_path, marker_dir)
             write_info(marker_dir, info)
@@ -457,6 +467,7 @@ def process_image(detector, image_path: Path, current_session: dict | None,
             append_excel_row(info, excel_path, log)
             return {"folder": session_folder, "info": info}
 
+        backup_original(image_path, backup_dir)
         safe_move(image_path, photo_dir / "_미분류" / "알수없는_QR")
         log("  형식이 올바르지 않은 QR -> _미분류")
         return current_session
@@ -464,12 +475,18 @@ def process_image(detector, image_path: Path, current_session: dict | None,
     if current_session:
         parent_folder = build_session_parent_folder(current_session["info"])
         subfolder = build_elapsed_subfolder(current_session["info"], image_path)
-        destination = move_with_sequence(
-            image_path, photo_dir / parent_folder / current_session["folder"] / subfolder, subfolder
+        target_dir = photo_dir / parent_folder / current_session["folder"] / subfolder
+        target_dir.mkdir(parents=True, exist_ok=True)
+        filename = next_sequence_filename(target_dir, subfolder, image_path.suffix)
+        backup_original(
+            image_path, backup_dir, Path(parent_folder) / current_session["folder"] / subfolder, filename
         )
+        destination = target_dir / filename
+        shutil.move(str(image_path), str(destination))
         log(f"  사진 저장: {parent_folder}/{current_session['folder']}/{subfolder}/{destination.name}")
         return current_session
 
+    backup_original(image_path, backup_dir)
     safe_move(image_path, photo_dir / "_미분류")
     log("  시작 QR 전 사진 -> _미분류/")
     return None
