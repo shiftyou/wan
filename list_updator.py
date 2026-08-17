@@ -55,43 +55,30 @@ def save_config(config: dict) -> None:
 
 def parse_folder_name(folder_name: str) -> dict | None:
     """
-    폴더명을 분석하여 (구분, 이름, 수술명, 수술날짜)를 반환합니다.
-    우선순위 1: 언더바(_) 구분 규칙 -> HP_홍길동_쌍꺼풀수술_260429
-    우선순위 2: 띄어쓰기 혼용 규칙 -> HP 홍길동_쌍꺼풀수술_260429
-    첫 조각이 HP/HT/일반 중 하나면 그 값이 구분이 되고 그 다음 조각이 이름입니다.
-    첫 조각이 셋 중 무엇도 아니면 구분은 기본값 '일반'이 되고, 첫 조각이 그대로 이름이 됩니다.
-    구분을 뗀 나머지가 (이름, 수술명, 날짜) 최소 3조각으로 쪼개지지 않으면 None을 반환합니다.
+    폴더명을 언더바(_)로만 분리하여 (구분, 이름, 수술명, 수술날짜)를 반환합니다.
+    스페이스는 구분자가 아니라 이름/수술명에 포함될 수 있는 일반 문자로 취급한다.
+    첫 조각이 HP/HT 중 하나면 그 값이 구분이 되고 그 다음 조각이 이름입니다.
+    첫 조각이 둘 중 무엇도 아니면 구분은 기본값 '일반'이 되고, 첫 조각이 그대로 이름이 됩니다.
+    마지막 조각은 항상 YYMMDD(6자리 숫자) 형식의 날짜여야 하며, 아니면 None을 반환합니다.
     """
+    parts = [p.strip() for p in folder_name.strip().split("_") if p.strip()]
+
     prefix = "일반"
-    clean_name = folder_name.strip()
-
-    for p in PROMO_CHOICES:
-        if clean_name.upper().startswith(p.upper() + " ") or clean_name.upper().startswith(p.upper() + "_"):
-            prefix = p
-            clean_name = clean_name[len(p) + 1:].strip()
-            break
-
-    parts = [p.strip() for p in clean_name.split("_") if p.strip()]
-
-    # 예외 처리: 만약 언더바가 아예 없다면 띄어쓰기로 분리 시도
-    if len(parts) < 2:
-        parts = [p.strip() for p in clean_name.split(" ") if p.strip()]
+    if parts and parts[0].upper() in ("HP", "HT"):
+        prefix = parts[0].upper()
+        parts = parts[1:]
 
     # 이름, 수술명, 날짜 최소 3개 조각이 없으면 대상에서 제외
     if len(parts) < 3:
         return None
 
-    date_str = None
-    surgery_name = "정보 없음"
-    patient_name = parts[0]
-
     last_part = parts[-1]
-    if re.match(r"^\d{6}$", last_part):
-        date_str = last_part
-        if len(parts) > 2:
-            surgery_name = ", ".join(parts[1:-1])
-    else:
-        surgery_name = ", ".join(parts[1:])
+    if not re.match(r"^\d{6}$", last_part):
+        return None
+
+    patient_name = parts[0]
+    date_str = last_part
+    surgery_name = ", ".join(parts[1:-1])
 
     return {"type": prefix, "name": patient_name, "surgery": surgery_name, "date_str": date_str}
 
@@ -421,7 +408,7 @@ class ListUpdatorApp(tk.Tk):
         control_frame = ttk.Frame(outer)
         control_frame.grid(row=3, column=0, sticky="ew", pady=(16, 8))
 
-        self.run_btn = ttk.Button(control_frame, text="실행", style="Accent.TButton",
+        self.run_btn = ttk.Button(control_frame, text="엑셀 업데이트", style="Accent.TButton",
                                    command=self._run_update)
         self.run_btn.grid(row=0, column=0, sticky="w")
 

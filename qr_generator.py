@@ -97,7 +97,7 @@ def make_qr(payload: str, output_path: Path) -> None:
         ) from exc
 
     qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_H,
-                       box_size=12, border=4)
+                       box_size=8, border=4)
     qr.add_data(payload)
     qr.make(fit=True)
     image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
@@ -154,16 +154,21 @@ def session_qr_path(info: dict, output_dir: Path) -> Path:
     return output_dir / f"{safe_filename(payload)}.png"
 
 
-def find_patient_photos(base_dir: Path, promo: str, name: str) -> list[Path]:
-    """base_dir 아래에서 파일명이 이름_(일반) 또는 홍보여부_이름_(HP/HT)으로
-    시작하는 이미지 파일(QR 생성 시 저장된 png 등)을 재귀적으로 찾아 반환한다."""
+def find_patient_photos(base_dir: Path, name: str) -> list[Path]:
+    """base_dir 아래에서 파일명의 이름 부분에 검색어가 포함된 이미지 파일
+    (QR 생성 시 저장된 png 등)을 재귀적으로 찾아 반환한다.
+    홍보구분과 무관하며, 이름 전체 일치가 아니라 부분 일치로 찾는다
+    (예: '김'으로 검색하면 '김종규' 등을, '종규'로 검색하면 '김종규', '이종규' 등을 찾는다)."""
     if not base_dir.is_dir():
         return []
-    prefix = f"{name}_" if promo == "일반" else f"{promo}_{name}_"
-    return sorted(
-        path for path in base_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS and path.name.startswith(prefix)
-    )
+    results = []
+    for path in base_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        info = parse_session_folder_name(path.stem)
+        if info and name in info["이름"]:
+            results.append(path)
+    return sorted(results)
 
 
 def parse_session_folder_name(folder_name: str) -> dict | None:
@@ -206,20 +211,6 @@ def find_session_folders(source_dir: Path) -> list[dict]:
             if info:
                 results.append({**info, "path": item_dir})
     return results
-
-
-def resize_to_fit(image, box_width: int, box_height: int):
-    """이미지를 비율을 유지한 채 box 크기에 꽉 차도록 늘리거나 줄인다.
-    PIL의 thumbnail()과 달리 원본보다 확대도 한다 (미리보기 영역이 커지면
-    사진도 같이 커지게 하기 위함)."""
-    from PIL import Image as PILImage
-
-    src_w, src_h = image.size
-    if src_w <= 0 or src_h <= 0 or box_width <= 0 or box_height <= 0:
-        return image
-    scale = min(box_width / src_w, box_height / src_h)
-    new_size = (max(int(src_w * scale), 1), max(int(src_h * scale), 1))
-    return image.resize(new_size, PILImage.LANCZOS)
 
 
 UI_FONT = ("Malgun Gothic", 10)
@@ -496,11 +487,9 @@ class QRGeneratorApp(tk.Tk):
 
         self._preview_source = None
         self._preview_photo = None
-        self._preview_resize_after_id = None
         self.preview_label = ttk.Label(preview_frame, text="생성된 QR이 여기에 표시됩니다.",
                                         style="Muted.TLabel", anchor="center", justify="center")
         self.preview_label.grid(row=0, column=0, sticky="nsew")
-        self.preview_label.bind("<Configure>", lambda _e: self._schedule_render_qr_preview())
 
         self.name_entry.focus_set()
 
@@ -519,23 +508,17 @@ class QRGeneratorApp(tk.Tk):
         self._preview_source = image
         self._render_qr_preview()
 
-    def _schedule_render_qr_preview(self) -> None:
-        if self._preview_resize_after_id:
-            self.after_cancel(self._preview_resize_after_id)
-        self._preview_resize_after_id = self.after(80, self._render_qr_preview)
-
     def _render_qr_preview(self) -> None:
-        self._preview_resize_after_id = None
+        """QR은 확대/축소 없이 원본 그대로 보여준다. 리샘플링을 거치면 흑/백
+        모듈 경계가 흐려지거나 회색 중간톤이 생겨, 화면을 카메라로 재촬영할 때
+        모아레와 겹쳐 인식률이 떨어질 수 있기 때문이다."""
         if self._preview_source is None:
             return
         try:
             from PIL import ImageTk
         except ImportError:
             return
-        width = max(self.preview_label.winfo_width() - 8, 60)
-        height = max(self.preview_label.winfo_height() - 8, 60)
-        fitted = resize_to_fit(self._preview_source, width, height)
-        photo = ImageTk.PhotoImage(fitted)
+        photo = ImageTk.PhotoImage(self._preview_source)
         self._preview_photo = photo  # 참조를 유지하지 않으면 가비지 컬렉션으로 사라진다.
         self.preview_label.configure(image=photo, text="")
 
@@ -624,7 +607,7 @@ class QRGeneratorApp(tk.Tk):
         left.rowconfigure(3, weight=1)
 
         ttk.Label(left, text="환자 사진 찾기", style="Header.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(left, text="홍보여부와 이름으로 사진 폴더를 검색합니다.",
+        ttk.Label(left, text="이름 일부만 입력해도 검색됩니다.",
                   style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 16))
 
         search_frame = ttk.LabelFrame(left, text="검색 조건", padding=(16, 14))
@@ -632,23 +615,18 @@ class QRGeneratorApp(tk.Tk):
         search_frame.columnconfigure(1, weight=1)
         field_pad = {"pady": 6}
 
-        ttk.Label(search_frame, text="홍보여부").grid(row=0, column=0, sticky="e", padx=(0, 12), **field_pad)
-        self.search_promo_var = tk.StringVar(value="일반")
-        ttk.Combobox(search_frame, textvariable=self.search_promo_var, values=PROMO_CHOICES,
-                     state="readonly", width=20).grid(row=0, column=1, sticky="ew", ipady=3, **field_pad)
-
-        ttk.Label(search_frame, text="이름").grid(row=1, column=0, sticky="e", padx=(0, 12), **field_pad)
+        ttk.Label(search_frame, text="이름").grid(row=0, column=0, sticky="e", padx=(0, 12), **field_pad)
         self.search_name_entry = tk.Entry(search_frame, width=26, **ENTRY_KWARGS)
-        self.search_name_entry.grid(row=1, column=1, sticky="ew", **field_pad)
+        self.search_name_entry.grid(row=0, column=1, sticky="ew", **field_pad)
         _sync_ime_composition_font(self.search_name_entry, *UI_FONT)
         self.search_name_entry.bind("<Return>", lambda _e: self._on_search())
 
         ttk.Button(search_frame, text="검색", style="Accent.TButton", command=self._on_search).grid(
-            row=2, column=0, columnspan=2, sticky="ew", pady=(6, 12))
+            row=1, column=0, columnspan=2, sticky="ew", pady=(6, 12))
 
-        ttk.Label(search_frame, text="사진 폴더").grid(row=3, column=0, sticky="e", padx=(0, 12), **field_pad)
+        ttk.Label(search_frame, text="사진 폴더").grid(row=2, column=0, sticky="e", padx=(0, 12), **field_pad)
         dir_row = ttk.Frame(search_frame)
-        dir_row.grid(row=3, column=1, sticky="ew", **field_pad)
+        dir_row.grid(row=2, column=1, sticky="ew", **field_pad)
         dir_row.columnconfigure(0, weight=1)
         # QR 저장 폴더와 동일한 폴더를 쓰므로 work_dir_var를 그대로 공유한다.
         tk.Entry(dir_row, textvariable=self.work_dir_var, **ENTRY_KWARGS).grid(
@@ -685,24 +663,21 @@ class QRGeneratorApp(tk.Tk):
         self._search_photos: list[Path] = []
         self._search_preview_source = None
         self._search_preview_image = None
-        self._search_preview_resize_after_id = None
         self._search_preview_placeholder = "검색 결과에서 사진을 클릭하면 여기에 크게 표시됩니다."
         self.search_preview_label = ttk.Label(
             preview_frame, text=self._search_preview_placeholder,
             style="Muted.TLabel", anchor="center", justify="center",
         )
         self.search_preview_label.grid(row=0, column=0, sticky="nsew")
-        self.search_preview_label.bind("<Configure>", lambda _e: self._schedule_render_search_preview())
 
     def _on_search(self) -> None:
-        promo = self.search_promo_var.get()
         name = " ".join(self.search_name_entry.get().split())
         if not name:
             self.search_status_var.set("이름을 입력하세요.")
             return
 
         base_dir = Path(self.work_dir_var.get().strip() or DEFAULT_WORK_DIR)
-        photos = find_patient_photos(base_dir, promo, name)
+        photos = find_patient_photos(base_dir, name)
         self._search_photos = photos
 
         self.result_listbox.delete(0, tk.END)
@@ -714,7 +689,7 @@ class QRGeneratorApp(tk.Tk):
         self._search_preview_image = None
 
         if not photos:
-            self.search_status_var.set(f"'{promo} {name}'의 사진을 찾지 못했습니다.")
+            self.search_status_var.set(f"'{name}'의 사진을 찾지 못했습니다.")
         else:
             self.search_status_var.set(f"{len(photos)}장을 찾았습니다.")
 
@@ -740,23 +715,17 @@ class QRGeneratorApp(tk.Tk):
         self._search_preview_source = image
         self._render_search_preview()
 
-    def _schedule_render_search_preview(self) -> None:
-        if self._search_preview_resize_after_id:
-            self.after_cancel(self._search_preview_resize_after_id)
-        self._search_preview_resize_after_id = self.after(80, self._render_search_preview)
-
     def _render_search_preview(self) -> None:
-        self._search_preview_resize_after_id = None
+        """QR 미리보기와 마찬가지로 확대/축소 없이 원본 그대로 보여준다.
+        검색 결과가 QR PNG일 경우 리샘플링으로 흑/백 경계가 흐려지면
+        화면 재촬영 시 인식률이 떨어질 수 있기 때문이다."""
         if self._search_preview_source is None:
             return
         try:
             from PIL import ImageTk
         except ImportError:
             return
-        width = max(self.search_preview_label.winfo_width() - 8, 60)
-        height = max(self.search_preview_label.winfo_height() - 8, 60)
-        fitted = resize_to_fit(self._search_preview_source, width, height)
-        photo = ImageTk.PhotoImage(fitted)
+        photo = ImageTk.PhotoImage(self._search_preview_source)
         self._search_preview_image = photo  # 참조를 유지하지 않으면 가비지 컬렉션으로 사라진다.
         self.search_preview_label.configure(image=photo, text="")
 
