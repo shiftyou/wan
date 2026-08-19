@@ -83,6 +83,16 @@ def parse_folder_name(folder_name: str) -> dict | None:
     return {"type": prefix, "name": patient_name, "surgery": surgery_name, "date_str": date_str}
 
 
+def guess_promo_prefix(folder_name: str) -> str | None:
+    """parse_folder_name이 형식 문제로 실패하더라도, 폴더명이 HP_/HT_로 시작하면
+    그 구분만 미리 알아낸다. 이름/날짜 형식이 깨졌어도 홍보 대상으로 의도된
+    폴더인지 구분하는 데 쓰인다."""
+    parts = [p.strip() for p in folder_name.strip().split("_") if p.strip()]
+    if parts and parts[0].upper() in ("HP", "HT"):
+        return parts[0].upper()
+    return None
+
+
 def _excel_row_key(promo, name, date_value, surgery) -> tuple[str, str, str, str]:
     """A~D열(홍보여부/이름/수술날짜/수술명)로 중복 여부를 판단하기 위한 키를
     만든다. 날짜 셀은 datetime으로 저장되므로 YYMMDD 문자열로 맞춰 비교한다."""
@@ -113,6 +123,7 @@ def update_excel(target_dir: Path, excel_path: Path, log) -> int:
 
     log("폴더 스캔 중...")
     new_patients = []
+    excluded_names = []
     for parent_name in os.listdir(target_dir):
         if parent_name.startswith("_"):
             continue
@@ -122,12 +133,19 @@ def update_excel(target_dir: Path, excel_path: Path, log) -> int:
         for item in os.listdir(parent_dir):
             if item.startswith("_"):
                 continue
-            if (parent_dir / item).is_dir():
-                parsed = parse_folder_name(item)
-                if parsed and parsed["type"] in ("HP", "HT"):
-                    new_patients.append(parsed)
+            if not (parent_dir / item).is_dir():
+                continue
+            parsed = parse_folder_name(item)
+            if parsed and parsed["type"] in ("HP", "HT"):
+                new_patients.append(parsed)
+            elif parsed is None and guess_promo_prefix(item) in ("HP", "HT"):
+                excluded_names.append(f"{parent_name}/{item}")
 
     log(f"스캔 완료: 총 {len(new_patients)}명의 홍보 환자 후보 발견.")
+    if excluded_names:
+        log(f"[안내] HP/HT로 보이지만 이름 형식이 안 맞아 제외된 폴더 {len(excluded_names)}개:")
+        for name in excluded_names:
+            log(f"  - {name}")
 
     wb = openpyxl.load_workbook(excel_path)
     ws = wb.active
@@ -167,6 +185,7 @@ def update_excel(target_dir: Path, excel_path: Path, log) -> int:
 
         pat_key = _excel_row_key(pat["type"], pat["name"], pat["date_str"], pat["surgery"])
         if pat_key in existing_keys:
+            log(f"  건너뜀 (이미 등록됨): [{pat['type']}] {pat['name']} / {pat['surgery']} / {pat['date_str']}")
             continue
 
         ws.row_dimensions[current_row].height = 22
@@ -258,6 +277,36 @@ def find_stray_session_dirs(target_dir: Path) -> list[dict]:
         if parsed:
             results.append({"name": item_name, "path": item_dir, "parsed": parsed})
     return results
+
+
+def _has_organized_session(parent_dir: Path) -> bool:
+    """parent_dir 바로 아래에 세션 폴더 이름 규칙([홍보구분_]이름_수술명_수술날짜)과
+    맞는 하위 폴더가 하나라도 있는지 본다. 있다면 parent_dir은 이미 정리가 끝난
+    상위 폴더(이름 또는 홍보구분_이름)로 본다."""
+    if not parent_dir.is_dir():
+        return False
+    for child_name in os.listdir(parent_dir):
+        if (parent_dir / child_name).is_dir() and parse_folder_name(child_name) is not None:
+            return True
+    return False
+
+
+def find_excluded_dirs(target_dir: Path) -> list[str]:
+    """target_dir 바로 아래 있지만 세션 폴더 이름 규칙과 맞지 않아 정리 대상에서
+    제외되는 폴더명을 반환한다. 다만 그 폴더 안에 이미 올바른 세션 폴더가 들어있다면
+    (이미 정리가 끝난 이름/홍보구분_이름 상위 폴더로 보고) 제외 목록에서도 뺀다."""
+    excluded = []
+    if not target_dir.is_dir():
+        return excluded
+    for item_name in sorted(os.listdir(target_dir)):
+        if item_name.startswith("_"):
+            continue
+        item_dir = target_dir / item_name
+        if not item_dir.is_dir():
+            continue
+        if parse_folder_name(item_name) is None and not _has_organized_session(item_dir):
+            excluded.append(item_name)
+    return excluded
 
 
 def organize_target_dir(target_dir: Path, log) -> int:
@@ -504,9 +553,10 @@ class ListUpdatorApp(tk.Tk):
         except Exception as error:
             log_put(f"[오류] 실행 중 문제가 발생했습니다: {error}")
 
-    def _show_organize_confirm_dialog(self, stray_dirs: list[dict]) -> bool:
+    def _show_organize_confirm_dialog(self, stray_dirs: list[dict], excluded_names: list[str]) -> bool:
         """messagebox는 스크롤이 안 되어 폴더가 많으면 창이 화면 밖으로 길어지므로,
-        스크롤 가능한 목록을 가진 별도 확인 창을 띄운다."""
+        스크롤 가능한 목록을 가진 별도 확인 창을 띄운다. 정리 대상 목록과 제외되는
+        (이름 규칙과 맞지 않는) 목록을 구분해서 보여준다."""
         dialog = tk.Toplevel(self)
         dialog.title("폴더 정리 확인")
         dialog.transient(self)
@@ -516,21 +566,39 @@ class ListUpdatorApp(tk.Tk):
 
         result = {"confirmed": False}
 
+        if stray_dirs:
+            summary_text = (
+                f"대상 폴더 바로 아래의 {len(stray_dirs)}개 폴더를 상위 폴더(이름 또는 "
+                f"홍보구분_이름) 아래로 옮깁니다.\n폴더 내용은 삭제 없이 그대로 이동됩니다."
+            )
+        else:
+            summary_text = "이동할 폴더는 없지만, 이름 규칙과 맞지 않아 제외된 폴더가 있습니다."
         ttk.Label(
-            dialog,
-            text=f"대상 폴더 바로 아래의 {len(stray_dirs)}개 폴더를 상위 폴더(이름 또는 "
-                 f"홍보구분_이름) 아래로 옮깁니다.\n폴더 내용은 삭제 없이 그대로 이동됩니다.",
+            dialog, text=summary_text,
             style="Muted.TLabel", justify="left", wraplength=440,
         ).pack(padx=16, pady=(16, 10), anchor="w")
 
+        ttk.Label(dialog, text=f"정리 대상 ({len(stray_dirs)}개)").pack(padx=16, anchor="w")
         list_text = scrolledtext.ScrolledText(
-            dialog, width=56, height=14, font=UI_FONT, wrap="word", state="normal",
+            dialog, width=56, height=9, font=UI_FONT, wrap="word", state="normal",
             bg=CARD_COLOR, fg=TEXT_COLOR, relief="flat", highlightthickness=1,
             highlightbackground=BORDER_COLOR,
         )
-        list_text.pack(padx=16, pady=(0, 10), fill="both", expand=True)
+        list_text.pack(padx=16, pady=(2, 10), fill="both", expand=True)
         list_text.insert("1.0", "\n".join(f"- {entry['name']}" for entry in stray_dirs))
         list_text.configure(state="disabled")
+
+        ttk.Label(dialog, text=f"제외됨 - 이름 규칙과 맞지 않음 ({len(excluded_names)}개)",
+                  style="Muted.TLabel").pack(padx=16, anchor="w")
+        excluded_text = scrolledtext.ScrolledText(
+            dialog, width=56, height=6, font=UI_FONT, wrap="word", state="normal",
+            bg=CARD_COLOR, fg=MUTED_COLOR, relief="flat", highlightthickness=1,
+            highlightbackground=BORDER_COLOR,
+        )
+        excluded_text.pack(padx=16, pady=(2, 10), fill="both", expand=True)
+        excluded_text.insert("1.0", "\n".join(f"- {name}" for name in excluded_names)
+                              or "(없음)")
+        excluded_text.configure(state="disabled")
 
         btn_frame = ttk.Frame(dialog)
         btn_frame.pack(padx=16, pady=(0, 16), fill="x")
@@ -567,11 +635,12 @@ class ListUpdatorApp(tk.Tk):
         target_path = Path(target_dir)
 
         stray_dirs = find_stray_session_dirs(target_path)
-        if not stray_dirs:
+        excluded_names = find_excluded_dirs(target_path)
+        if not stray_dirs and not excluded_names:
             messagebox.showinfo("정리할 폴더 없음", "대상 폴더 바로 아래에 정리할 세션 폴더가 없습니다.")
             return
 
-        if not self._show_organize_confirm_dialog(stray_dirs):
+        if not self._show_organize_confirm_dialog(stray_dirs, excluded_names):
             return
 
         self.log_text.configure(state="normal")

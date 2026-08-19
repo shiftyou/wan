@@ -374,11 +374,11 @@ def append_excel_row(info: dict[str, str], excel_path: Path, log) -> None:
         import openpyxl
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     except ImportError as error:
-        log(f"  엑셀 업데이트 건너뜀 (openpyxl 필요): {error}")
+        log(f"  엑셀 업데이트 건너뜀 (openpyxl 필요): {error}", "warn")
         return
 
     if not excel_path.exists():
-        log(f"  엑셀 업데이트 건너뜀 (파일 없음): {excel_path}")
+        log(f"  엑셀 업데이트 건너뜀 (파일 없음): {excel_path}", "warn")
         return
 
     try:
@@ -397,7 +397,7 @@ def append_excel_row(info: dict[str, str], excel_path: Path, log) -> None:
 
         new_key = _excel_row_key(info["홍보여부"], info["이름"], info["수술날짜"], info["수술명"])
         if new_key in existing_keys:
-            log(f"  엑셀 업데이트 건너뜀 (이미 등록됨): {info['이름']}")
+            log(f"  엑셀 업데이트 건너뜀 (이미 등록됨): {info['이름']}", "warn")
             return
 
         try:
@@ -462,9 +462,9 @@ def append_excel_row(info: dict[str, str], excel_path: Path, log) -> None:
                 cell.fill = fill_zebra
 
         wb.save(excel_path)
-        log(f"  엑셀 업데이트: {info['이름']} 추가")
+        log(f"  엑셀 업데이트: {info['이름']} 추가", "session")
     except Exception as error:
-        log(f"  엑셀 업데이트 실패: {error}")
+        log(f"  엑셀 업데이트 실패: {error}", "error")
 
 
 def process_image(detector, image_path: Path, current_session: dict | None,
@@ -483,14 +483,14 @@ def process_image(detector, image_path: Path, current_session: dict | None,
             write_info(marker_dir, info)
             write_info(photo_dir / parent_folder / session_folder, info)
             if current_session and current_session["folder"] != session_folder:
-                log(f"  이전 환자 종료: {current_session['folder']}")
-            log(f"  새로운 환자 시작: {parent_folder}/{session_folder}")
+                log(f"  이전 환자 종료: {current_session['folder']}", "session")
+            log(f"▶ 새로운 환자 시작: {parent_folder}/{session_folder}", "session")
             append_excel_row(info, excel_path, log)
             return {"folder": session_folder, "info": info}
 
         backup_original(image_path, backup_dir)
         safe_move(image_path, photo_dir / "_미분류" / "알수없는_QR")
-        log("  형식이 올바르지 않은 QR -> _미분류")
+        log("  형식이 올바르지 않은 QR -> _미분류", "warn")
         return current_session
 
     if current_session:
@@ -504,12 +504,12 @@ def process_image(detector, image_path: Path, current_session: dict | None,
         )
         destination = target_dir / filename
         shutil.move(str(image_path), str(destination))
-        log(f"  사진 저장: {parent_folder}/{current_session['folder']}/{subfolder}/{destination.name}")
+        log(f"  사진 저장: {parent_folder}/{current_session['folder']}/{subfolder}/{destination.name}", "photo")
         return current_session
 
     backup_original(image_path, backup_dir)
     safe_move(image_path, photo_dir / "_미분류")
-    log("  시작 QR 전 사진 -> _미분류/")
+    log("  시작 QR 전 사진 -> _미분류/", "warn")
     return None
 
 
@@ -521,24 +521,25 @@ def wait_for_directory(path: Path, stop_event: threading.Event, log, retry_secon
             path.mkdir(parents=True, exist_ok=True)
             return True
         except OSError as error:
-            log(f"  {path} 접근 대기 중... ({error})")
+            log(f"  {path} 접근 대기 중... ({error})", "warn")
             stop_event.wait(retry_seconds)
     return False
 
 
 def run_watcher(watch_dir: Path, photo_dir: Path, backup_dir: Path, excel_path: Path,
                  stop_event: threading.Event, log_put, use_pyzbar: bool = False) -> None:
-    """감시 루프 본체. 백그라운드 스레드에서 실행되며, log_put(str)으로 GUI에
-    로그 한 줄씩 전달한다."""
+    """감시 루프 본체. 백그라운드 스레드에서 실행되며, log_put((level, str))으로 GUI에
+    로그 한 줄씩 전달한다. level은 GUI에서 새 환자 시작(session)/사진 분류(photo)/
+    미분류·대기(warn)/오류(error)/일반 안내(info)를 구분해 색을 다르게 표시하는 데 쓰인다."""
 
-    def log(message: str) -> None:
-        log_put(f"{datetime.now().strftime('%H:%M:%S')} {message}")
+    def log(message: str, level: str = "info") -> None:
+        log_put((level, f"{datetime.now().strftime('%H:%M:%S')} {message}"))
 
     try:
         import cv2
     except ImportError:
-        log("OpenCV가 필요합니다. 아래 명령을 한 번 실행하세요:")
-        log("  .venv/Scripts/python.exe -m pip install opencv-python")
+        log("OpenCV가 필요합니다. 아래 명령을 한 번 실행하세요:", "error")
+        log("  .venv/Scripts/python.exe -m pip install opencv-python", "error")
         return
 
     if not wait_for_directory(watch_dir, stop_event, log):
@@ -574,7 +575,7 @@ def run_watcher(watch_dir: Path, photo_dir: Path, backup_dir: Path, excel_path: 
                 observations.pop(image_path, None)
             except Exception as error:
                 # 파일을 남겨 다음 주기에 다시 시도한다. 실패 파일을 처리 완료로 표시하지 않는다.
-                log(f"  처리 보류 (다시 시도): {error}")
+                log(f"  처리 보류 (다시 시도): {error}", "error")
         stop_event.wait(CHECK_INTERVAL)
 
     log("감시를 중지했습니다.")
@@ -596,6 +597,7 @@ ACCENT_COLOR = "#2f6fed"
 ACCENT_HOVER = "#255ac2"
 SUCCESS_COLOR = "#1a7f37"
 ERROR_COLOR = "#c0392b"
+WARN_COLOR = "#b45309"
 
 ENTRY_KWARGS = dict(
     font=UI_FONT, relief="flat", highlightthickness=1,
@@ -737,6 +739,12 @@ class QrClassifierApp(tk.Tk):
             highlightbackground=BORDER_COLOR,
         )
         self.log_text.grid(row=0, column=0, sticky="nsew")
+        # 새 환자 시작(session)은 굵게 강조해 사진 분류(photo)와 한눈에 구분되게 한다.
+        self.log_text.tag_configure("session", foreground=ACCENT_COLOR, font=UI_FONT_BOLD)
+        self.log_text.tag_configure("photo", foreground=MUTED_COLOR)
+        self.log_text.tag_configure("warn", foreground=WARN_COLOR)
+        self.log_text.tag_configure("error", foreground=ERROR_COLOR, font=UI_FONT_BOLD)
+        self.log_text.tag_configure("info", foreground=TEXT_COLOR)
 
     def _add_folder_row(self, parent: ttk.Frame, row: int, label: str, var: tk.StringVar,
                          browse_command=None, extra_button=None) -> None:
@@ -829,10 +837,10 @@ class QrClassifierApp(tk.Tk):
     def _poll_log_queue(self) -> None:
         while True:
             try:
-                message = self._log_queue.get_nowait()
+                level, message = self._log_queue.get_nowait()
             except Empty:
                 break
-            self._append_log(message)
+            self._append_log(message, level)
 
         if self._worker_thread and self._worker_thread.is_alive():
             self.after(200, self._poll_log_queue)
@@ -841,9 +849,9 @@ class QrClassifierApp(tk.Tk):
             self.toggle_btn.configure(text="감시 시작")
             self._set_status("중지됨", tone="muted")
 
-    def _append_log(self, message: str) -> None:
+    def _append_log(self, message: str, level: str = "info") -> None:
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", message + "\n")
+        self.log_text.insert("end", message + "\n", level)
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
