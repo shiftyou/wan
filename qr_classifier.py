@@ -57,6 +57,12 @@ CHECK_INTERVAL = float(os.environ.get("CHECK_INTERVAL", "1"))
 STABLE_SECONDS = float(os.environ.get("STABLE_SECONDS", "3"))
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 
+# QR 검출 전 이미지를 이 크기(긴 변 기준, px) 이하로 축소한다. QR 인식에는 원본
+# 해상도(수천만 화소)가 전혀 필요 없는데, cv2/pyzbar 검출기는 픽셀 수에 비례해
+# 느려진다 - 특히 QR이 없는 일반 사진마다 매번 여러 번(전체+타일) 검사를 반복하므로
+# 이 축소가 없으면 사진 한 장 처리 시간이 크게 늘어난다.
+DECODE_MAX_DIMENSION = 1600
+
 PROMO_CHOICES = ("HP", "HT", "일반")
 SESSION_DATE_RE = re.compile(r"^\d{6}$")
 
@@ -151,14 +157,15 @@ def build_session_parent_folder(info: dict[str, str]) -> str:
 def build_elapsed_subfolder(info: dict[str, str], image_path: Path) -> str:
     """수술날짜 기준으로 사진이 찍힌 날짜까지의 경과일 서브폴더명을 만든다.
     이 이름은 그 안에 저장되는 사진 파일명의 접두어(+ 순번)로도 그대로 쓰인다.
+    상위 폴더명에 이미 수술명이 들어가 있으므로 여기서는 뺀다.
     QR과 동일하게 홍보여부가 '일반'이면 표기하지 않는다."""
     photo_date = datetime.fromtimestamp(image_path.stat().st_mtime).date()
     surgery_date = datetime.strptime(info["수술날짜"], "%y%m%d").date()
     elapsed_days = (photo_date - surgery_date).days
     if info["홍보여부"] == "일반":
-        raw = f"{info['이름']}_{info['수술명']}_#{elapsed_days}"
+        raw = f"{info['이름']}_#{elapsed_days}"
     else:
-        raw = f"{info['홍보여부']}_{info['이름']}_{info['수술명']}_#{elapsed_days}"
+        raw = f"{info['홍보여부']}_{info['이름']}_#{elapsed_days}"
     return folder_name(raw)
 
 
@@ -268,10 +275,12 @@ def _scan_tiles(image, detect_fn, grid: int = 2, overlap: float = 0.15) -> str |
     return None
 
 
-def decode_qr(detector, image_path: Path) -> str | None:
+def decode_qr(detector, image_path: Path, use_pyzbar: bool = False) -> str | None:
     """사진 한 장에서 하나의 QR payload를 읽는다. 인식은 모두 로컬에서 수행된다.
-    cv2(전체 -> 구역별)로 먼저 시도하고, 실패하면 pyzbar(전체 -> 구역별)로
-    한 번 더 시도한다."""
+    cv2(전체 -> 구역별)로 먼저 시도하고, use_pyzbar가 True면 실패했을 때 pyzbar
+    (전체 -> 구역별)로 한 번 더 시도한다. QR 인식용으로만 쓰이는 복사본이라
+    DECODE_MAX_DIMENSION으로 미리 축소해서 검사한다 - 실제로 이동/백업되는
+    원본 파일에는 영향이 없다."""
     import cv2
     import numpy as np
 
@@ -288,7 +297,18 @@ def decode_qr(detector, image_path: Path) -> str | None:
     if image is None:
         return None
 
-    for detect_fn in (lambda img: _detect_qr(detector, img), _detect_qr_pyzbar):
+    height, width = image.shape[:2]
+    longest_side = max(height, width)
+    if longest_side > DECODE_MAX_DIMENSION:
+        scale = DECODE_MAX_DIMENSION / longest_side
+        image = cv2.resize(image, (int(width * scale), int(height * scale)),
+                            interpolation=cv2.INTER_AREA)
+
+    detect_fns = [lambda img: _detect_qr(detector, img)]
+    if use_pyzbar:
+        detect_fns.append(_detect_qr_pyzbar)
+
+    for detect_fn in detect_fns:
         payload = detect_fn(image)
         if payload:
             return payload
@@ -448,8 +468,9 @@ def append_excel_row(info: dict[str, str], excel_path: Path, log) -> None:
 
 
 def process_image(detector, image_path: Path, current_session: dict | None,
-                   photo_dir: Path, backup_dir: Path, excel_path: Path, log) -> dict | None:
-    payload = decode_qr(detector, image_path)
+                   photo_dir: Path, backup_dir: Path, excel_path: Path, log,
+                   use_pyzbar: bool = False) -> dict | None:
+    payload = decode_qr(detector, image_path, use_pyzbar)
 
     if payload:
         info = parse_session_payload(payload)
@@ -506,7 +527,7 @@ def wait_for_directory(path: Path, stop_event: threading.Event, log, retry_secon
 
 
 def run_watcher(watch_dir: Path, photo_dir: Path, backup_dir: Path, excel_path: Path,
-                 stop_event: threading.Event, log_put) -> None:
+                 stop_event: threading.Event, log_put, use_pyzbar: bool = False) -> None:
     """감시 루프 본체. 백그라운드 스레드에서 실행되며, log_put(str)으로 GUI에
     로그 한 줄씩 전달한다."""
 
@@ -546,7 +567,8 @@ def run_watcher(watch_dir: Path, photo_dir: Path, backup_dir: Path, excel_path: 
             log(f"[처리] {image_path.name}")
             try:
                 current_session = process_image(
-                    detector, image_path, current_session, photo_dir, backup_dir, excel_path, log
+                    detector, image_path, current_session, photo_dir, backup_dir, excel_path, log,
+                    use_pyzbar,
                 )
                 save_current_session(current_session)
                 observations.pop(image_path, None)
@@ -597,8 +619,9 @@ class QrClassifierApp(tk.Tk):
         self.backup_dir_var = tk.StringVar(value=self._config.get("backup_dir") or str(DEFAULT_BACKUP_DIR))
         self.excel_path_var = tk.StringVar(value=self._config.get("excel_path") or str(DEFAULT_EXCEL_PATH))
         self.auto_start_var = tk.BooleanVar(value=self._config.get("auto_start", False))
+        self.detailed_qr_var = tk.BooleanVar(value=self._config.get("detailed_qr_scan", False))
         for var in (self.watch_dir_var, self.photo_dir_var, self.backup_dir_var,
-                    self.excel_path_var, self.auto_start_var):
+                    self.excel_path_var, self.auto_start_var, self.detailed_qr_var):
             var.trace_add("write", self._schedule_save_config)
 
         self._stop_event: threading.Event | None = None
@@ -629,6 +652,7 @@ class QrClassifierApp(tk.Tk):
             "backup_dir": self.backup_dir_var.get().strip(),
             "excel_path": self.excel_path_var.get().strip(),
             "auto_start": self.auto_start_var.get(),
+            "detailed_qr_scan": self.detailed_qr_var.get(),
         })
         save_config(self._config)
 
@@ -698,6 +722,9 @@ class QrClassifierApp(tk.Tk):
 
         ttk.Checkbutton(control_frame, text="실행하면 자동으로 감시 시작", variable=self.auto_start_var,
                          style="TCheckbutton").grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(control_frame, text="더 상세하게 QR 검사 (분류 속도가 느려집니다.)",
+                         variable=self.detailed_qr_var,
+                         style="TCheckbutton").grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         log_frame = ttk.LabelFrame(outer, text="실행 로그", padding=(10, 10))
         log_frame.grid(row=4, column=0, sticky="nsew", pady=(8, 0))
@@ -780,7 +807,7 @@ class QrClassifierApp(tk.Tk):
         self._worker_thread = threading.Thread(
             target=run_watcher,
             args=(Path(watch_dir), Path(photo_dir), Path(backup_dir), Path(excel_path),
-                  self._stop_event, self._log_queue.put),
+                  self._stop_event, self._log_queue.put, self.detailed_qr_var.get()),
             daemon=True,
         )
         self._worker_thread.start()
