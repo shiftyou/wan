@@ -61,15 +61,15 @@ pyz_updator = PYZ(a_updator.pure, a_updator.zipped_data)
 
 exe_generator = EXE(
     pyz_generator, a_generator.scripts, [], exclude_binaries=True,
-    name="QR_Generator", console=False,
+    name="환자QR생성기", console=False,
 )
 exe_classifier = EXE(
     pyz_classifier, a_classifier.scripts, [], exclude_binaries=True,
-    name="QR_Classifier", console=False,
+    name="환자사진분류기", console=False,
 )
 exe_updator = EXE(
     pyz_updator, a_updator.scripts, [], exclude_binaries=True,
-    name="List_Updator", console=False,
+    name="엑셀과폴더업데이트", console=False,
 )
 
 coll = COLLECT(

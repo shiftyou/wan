@@ -85,7 +85,7 @@ QR 이미지 하단에 페이로드를 한글로 표시하기 위해 Windows 기
 
 ## 6. 로그인 시 자동 실행
 
-`qr_classifier.py`(또는 `QR_Classifier.exe`)는 창을 열면 화면 안 체크박스
+`qr_classifier.py`(또는 `환자사진분류기.exe`)는 창을 열면 화면 안 체크박스
 "실행하면 자동으로 감시 시작"이 켜져 있을 때만 사람이 버튼을 누르지 않아도
 곧바로 감시를 시작합니다. **기본값은 꺼짐**이라 처음 설치했을 때는 창만 뜨고
 감시는 시작되지 않습니다 — 폴더 설정을 먼저 확인한 뒤 이 체크박스를 한 번
@@ -101,7 +101,7 @@ QR 이미지 하단에 페이로드를 한글로 표시하기 위해 Windows 기
 2. `Win + R` → `shell:startup` 입력 후 엔터를 누르면 시작프로그램 폴더가
    열립니다.
 3. 아래 둘 중 하나의 바로가기를 그 폴더에 만듭니다.
-   - exe 버전: `QR_Classifier.exe`
+   - exe 버전: `환자사진분류기.exe`
    - 소스 버전: 새 바로가기를 만들고 대상(Target)을 아래처럼 지정합니다
      (`pythonw.exe`라 콘솔 창이 뜨지 않습니다).
 
@@ -157,8 +157,8 @@ exe는 Windows에서만 빌드할 수 있습니다(PyInstaller는 크로스 컴�
 
 저장소에 있는 `patient_tools.spec`은 PyInstaller의 "Multi-Package Bundle"
 기능(`MERGE()`)으로 세 스크립트를 하나의 `_internal` 폴더를 공유하도록
-묶어 빌드합니다. 결과물은 `dist/PatientTools/` 안에 `QR_Generator.exe`,
-`QR_Classifier.exe`, `List_Updator.exe`가 같은 폴더에, `_internal/`을
+묶어 빌드합니다. 결과물은 `dist/PatientTools/` 안에 `환자QR생성기.exe`,
+`환자사진분류기.exe`, `엑셀과폴더업데이트.exe`가 같은 폴더에, `_internal/`을
 공유하는 형태로 생깁니다.
 
 `patient_tools.spec` 안의 `PYZBAR_DIR` 값(pyzbar 네이티브 DLL 위치)은
@@ -174,7 +174,7 @@ exe는 Windows에서만 빌드할 수 있습니다(PyInstaller는 크로스 컴�
 .venv\Scripts\pyinstaller patient_tools.spec
 ```
 
-빌드 후에는 회전되었거나 흐린 QR 사진으로 `QR_Classifier.exe`를 한 번
+빌드 후에는 회전되었거나 흐린 QR 사진으로 `환자사진분류기.exe`를 한 번
 테스트해 보세요 — pyzbar DLL이 제대로 안 들어가면 크래시 없이 인식률만
 조용히 떨어져서 눈치채기 어렵습니다.
 
@@ -184,9 +184,9 @@ exe는 Windows에서만 빌드할 수 있습니다(PyInstaller는 크로스 컴�
 ### 개별 빌드 (도구 하나만 필요할 때)
 
 ```bat
-.venv\Scripts\pyinstaller --onefile --windowed --name QR_Generator qr_generator.py
-.venv\Scripts\pyinstaller --onefile --windowed --name List_Updator list_updator.py
-.venv\Scripts\pyinstaller --onefile --windowed --name QR_Classifier ^
+.venv\Scripts\pyinstaller --onefile --windowed --name 환자QR생성기 qr_generator.py
+.venv\Scripts\pyinstaller --onefile --windowed --name 엑셀과폴더업데이트 list_updator.py
+.venv\Scripts\pyinstaller --onefile --windowed --name 환자사진분류기 ^
   --add-binary "<PYZBAR_DIR>\libzbar-64.dll;pyzbar" ^
   --add-binary "<PYZBAR_DIR>\libiconv.dll;pyzbar" ^
   qr_classifier.py

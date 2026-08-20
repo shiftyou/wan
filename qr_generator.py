@@ -86,6 +86,40 @@ def normalize_surgery(value: str) -> str:
     return value
 
 
+def _wrap_label(draw, label: str, font, max_width: int) -> list[str]:
+    """label을 max_width 안에 들어가도록 여러 줄로 나눈다. 페이로드가
+    '_'로 구분되어 있으므로 그 경계에서 우선 나누고, 한 조각 자체가
+    max_width보다 넓으면 글자 단위로 더 쪼갠다."""
+    lines = []
+    current = ""
+    for part in label.split("_"):
+        candidate = f"{current}_{part}" if current else part
+        if not current or draw.textlength(candidate, font=font) <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = part
+    if current:
+        lines.append(current)
+
+    wrapped = []
+    for line in lines:
+        if draw.textlength(line, font=font) <= max_width:
+            wrapped.append(line)
+            continue
+        chunk = ""
+        for ch in line:
+            candidate = chunk + ch
+            if not chunk or draw.textlength(candidate, font=font) <= max_width:
+                chunk = candidate
+            else:
+                wrapped.append(chunk)
+                chunk = ch
+        if chunk:
+            wrapped.append(chunk)
+    return wrapped
+
+
 def make_qr(payload: str, output_path: Path) -> None:
     try:
         import qrcode
@@ -102,23 +136,32 @@ def make_qr(payload: str, output_path: Path) -> None:
     qr.make(fit=True)
     image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
 
-    # 촬영자가 QR 내용을 확인할 수 있도록 페이로드를 그대로 표기한다.
+    # 촬영자가 QR 내용을 확인할 수 있도록 페이로드를 그대로 표기한다. 한 줄로
+    # 그리면 길 때 QR 폭 밖으로 잘려 나가므로, QR 폭에 맞춰 여러 줄로 나눈다.
     font_path = resolve_korean_font_path()
     font = (
         ImageFont.truetype(str(font_path), size=26)
         if font_path
         else ImageFont.load_default()
     )
-    label = payload
     draw = ImageDraw.Draw(image)
-    label_box = draw.textbbox((0, 0), label, font=font)
-    label_height = label_box[3] - label_box[1] + 28
+    max_width = image.width - 16
+    lines = _wrap_label(draw, payload, font, max_width)
+
+    line_gap = 6
+    line_boxes = [draw.textbbox((0, 0), line, font=font) for line in lines]
+    line_heights = [box[3] - box[1] for box in line_boxes]
+    label_height = sum(line_heights) + line_gap * (len(lines) - 1) + 28
+
     labeled = Image.new("RGB", (image.width, image.height + label_height), "white")
     labeled.paste(image, (0, 0))
     draw = ImageDraw.Draw(labeled)
-    label_width = label_box[2] - label_box[0]
-    draw.text(((image.width - label_width) // 2, image.height + 12), label,
-              fill="black", font=font)
+    y = image.height + 12
+    for line, box, height in zip(lines, line_boxes, line_heights):
+        line_width = box[2] - box[0]
+        x = (image.width - line_width) // 2
+        draw.text((x, y), line, fill="black", font=font)
+        y += height + line_gap
     output_path.parent.mkdir(parents=True, exist_ok=True)
     labeled.save(output_path)
 
