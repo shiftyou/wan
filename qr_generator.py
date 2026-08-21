@@ -536,7 +536,7 @@ class QRGeneratorApp(tk.Tk):
 
         self.status_var = tk.StringVar(value="")
         self.status_label = ttk.Label(left, textvariable=self.status_var, style="Muted.TLabel",
-                                       anchor="center")
+                                       anchor="center", justify="center", wraplength=300)
         self.status_label.grid(row=5, column=0, sticky="ew")
 
         # 오른쪽: 미리보기 (창을 늘리면 이쪽이 늘어난다)
