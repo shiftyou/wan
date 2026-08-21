@@ -79,13 +79,6 @@ def clean_field(value: str, field_name: str) -> str:
     return value
 
 
-def normalize_surgery(value: str) -> str:
-    """수술명에 입력된 스페이스를 콤마로 통일한다 (예: '쌍꺼풀 코성형' -> '쌍꺼풀,코성형')."""
-    value = re.sub(r"\s*,\s*", ",", value)
-    value = re.sub(r"\s+", ",", value)
-    return value
-
-
 def _wrap_label(draw, label: str, font, max_width: int) -> list[str]:
     """label을 max_width 안에 들어가도록 여러 줄로 나눈다. 페이로드가
     '_'로 구분되어 있으므로 그 경계에서 우선 나누고, 한 조각 자체가
@@ -637,7 +630,7 @@ class QRGeneratorApp(tk.Tk):
         try:
             promo = self.promo_var.get()
             name = clean_field(self.name_entry.get(), "이름")
-            surgery = normalize_surgery(clean_field(self.surgery_entry.get(), "수술명"))
+            surgery = clean_field(self.surgery_entry.get(), "수술명")
             surgery_date = self.date_entry.get_date().strftime("%y%m%d")
             output_dir_str = self.work_dir_var.get().strip()
             if not output_dir_str:
