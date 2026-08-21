@@ -372,7 +372,12 @@ def _excel_row_key(promo, name, date_value, surgery) -> tuple[str, str, str, str
 
 
 def append_excel_row(info: dict[str, str], excel_path: Path, log) -> None:
-    """새 세션이 시작될 때 홍보 환자 엑셀에 한 행을 바로 추가한다."""
+    """새 세션이 시작될 때 홍보 환자 엑셀에 한 행을 바로 추가한다.
+    일반(비홍보) 환자는 이 엑셀의 관리 대상이 아니므로 건너뛴다 -
+    list_updator.py의 백필 로직과 동일한 기준이다."""
+    if info["홍보여부"] not in ("HP", "HT"):
+        return
+
     try:
         import openpyxl
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
