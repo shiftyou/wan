@@ -256,6 +256,23 @@ def find_session_folders(source_dir: Path) -> list[dict]:
     return results
 
 
+def resize_to_fit_shrink_only(image, box_width: int, box_height: int):
+    """이미지가 box보다 크면 비율을 유지한 채 줄이고, box보다 작거나 같으면
+    원본 그대로 돌려준다 - 확대는 하지 않는다. 화면에 보이는 크기가 곧
+    카메라로 촬영하는 실제 크기이므로, 화면이 QR보다 작을 때만 전부 보이도록
+    줄이고, 화면이 더 크다고 화질 손실을 감수하며 확대하지는 않는다."""
+    from PIL import Image as PILImage
+
+    src_w, src_h = image.size
+    if src_w <= 0 or src_h <= 0 or box_width <= 0 or box_height <= 0:
+        return image
+    scale = min(box_width / src_w, box_height / src_h, 1.0)
+    if scale >= 1.0:
+        return image
+    new_size = (max(int(src_w * scale), 1), max(int(src_h * scale), 1))
+    return image.resize(new_size, PILImage.LANCZOS)
+
+
 UI_FONT = ("Malgun Gothic", 10)
 UI_FONT_BOLD = ("Malgun Gothic", 10, "bold")
 TITLE_FONT = ("Malgun Gothic", 15, "bold")
@@ -530,9 +547,11 @@ class QRGeneratorApp(tk.Tk):
 
         self._preview_source = None
         self._preview_photo = None
+        self._preview_resize_after_id = None
         self.preview_label = ttk.Label(preview_frame, text="생성된 QR이 여기에 표시됩니다.",
                                         style="Muted.TLabel", anchor="center", justify="center")
         self.preview_label.grid(row=0, column=0, sticky="nsew")
+        self.preview_label.bind("<Configure>", lambda _e: self._schedule_render_qr_preview())
 
         self.name_entry.focus_set()
 
@@ -551,17 +570,27 @@ class QRGeneratorApp(tk.Tk):
         self._preview_source = image
         self._render_qr_preview()
 
+    def _schedule_render_qr_preview(self) -> None:
+        if self._preview_resize_after_id:
+            self.after_cancel(self._preview_resize_after_id)
+        self._preview_resize_after_id = self.after(80, self._render_qr_preview)
+
     def _render_qr_preview(self) -> None:
-        """QR은 확대/축소 없이 원본 그대로 보여준다. 리샘플링을 거치면 흑/백
-        모듈 경계가 흐려지거나 회색 중간톤이 생겨, 화면을 카메라로 재촬영할 때
-        모아레와 겹쳐 인식률이 떨어질 수 있기 때문이다."""
+        """QR은 원본보다 확대하지 않는다 - 화면에 보이는 크기가 곧 카메라로
+        촬영하는 크기이므로, 미리보기 영역이 QR 원본보다 작을 때만 전부 보이게
+        줄이고 그렇지 않으면 원본 그대로 보여준다. 확대해서 리샘플링하면 흑/백
+        모듈 경계에 회색 중간톤이 생겨 화면 재촬영 시 인식률이 떨어질 수 있다."""
+        self._preview_resize_after_id = None
         if self._preview_source is None:
             return
         try:
             from PIL import ImageTk
         except ImportError:
             return
-        photo = ImageTk.PhotoImage(self._preview_source)
+        width = max(self.preview_label.winfo_width(), 1)
+        height = max(self.preview_label.winfo_height(), 1)
+        fitted = resize_to_fit_shrink_only(self._preview_source, width, height)
+        photo = ImageTk.PhotoImage(fitted)
         self._preview_photo = photo  # 참조를 유지하지 않으면 가비지 컬렉션으로 사라진다.
         self.preview_label.configure(image=photo, text="")
 
@@ -706,12 +735,14 @@ class QRGeneratorApp(tk.Tk):
         self._search_photos: list[Path] = []
         self._search_preview_source = None
         self._search_preview_image = None
+        self._search_preview_resize_after_id = None
         self._search_preview_placeholder = "검색 결과에서 사진을 클릭하면 여기에 크게 표시됩니다."
         self.search_preview_label = ttk.Label(
             preview_frame, text=self._search_preview_placeholder,
             style="Muted.TLabel", anchor="center", justify="center",
         )
         self.search_preview_label.grid(row=0, column=0, sticky="nsew")
+        self.search_preview_label.bind("<Configure>", lambda _e: self._schedule_render_search_preview())
 
     def _on_search(self) -> None:
         name = " ".join(self.search_name_entry.get().split())
@@ -758,17 +789,26 @@ class QRGeneratorApp(tk.Tk):
         self._search_preview_source = image
         self._render_search_preview()
 
+    def _schedule_render_search_preview(self) -> None:
+        if self._search_preview_resize_after_id:
+            self.after_cancel(self._search_preview_resize_after_id)
+        self._search_preview_resize_after_id = self.after(80, self._render_search_preview)
+
     def _render_search_preview(self) -> None:
-        """QR 미리보기와 마찬가지로 확대/축소 없이 원본 그대로 보여준다.
-        검색 결과가 QR PNG일 경우 리샘플링으로 흑/백 경계가 흐려지면
-        화면 재촬영 시 인식률이 떨어질 수 있기 때문이다."""
+        """QR 미리보기와 마찬가지로 원본보다 확대하지 않는다. 미리보기 영역이
+        사진 원본보다 작을 때만 전부 보이게 줄이고, 그렇지 않으면 원본 그대로
+        보여준다 (검색 결과가 QR PNG일 경우 확대하면 인식률이 떨어질 수 있다)."""
+        self._search_preview_resize_after_id = None
         if self._search_preview_source is None:
             return
         try:
             from PIL import ImageTk
         except ImportError:
             return
-        photo = ImageTk.PhotoImage(self._search_preview_source)
+        width = max(self.search_preview_label.winfo_width(), 1)
+        height = max(self.search_preview_label.winfo_height(), 1)
+        fitted = resize_to_fit_shrink_only(self._search_preview_source, width, height)
+        photo = ImageTk.PhotoImage(fitted)
         self._search_preview_image = photo  # 참조를 유지하지 않으면 가비지 컬렉션으로 사라진다.
         self.search_preview_label.configure(image=photo, text="")
 

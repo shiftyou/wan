@@ -56,6 +56,9 @@ DEFAULT_EXCEL_PATH = DEFAULT_PHOTO_DIR / "완성형_홍보환자_리스트.xlsx"
 CHECK_INTERVAL = float(os.environ.get("CHECK_INTERVAL", "1"))
 STABLE_SECONDS = float(os.environ.get("STABLE_SECONDS", "3"))
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+# 동영상은 QR 검사 없이 분류/백업만 한다 (QR은 사진에만 찍히므로 검사할 필요가 없다).
+VIDEO_EXTENSIONS = {".mp4"}
+MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
 # QR 검출 전 이미지를 이 크기(긴 변 기준, px) 이하로 축소한다. QR 인식에는 원본
 # 해상도(수천만 화소)가 전혀 필요 없는데, cv2/pyzbar 검출기는 픽셀 수에 비례해
@@ -323,7 +326,7 @@ def incoming_images(watch_dir: Path) -> list[Path]:
         (
             item
             for item in watch_dir.iterdir()
-            if item.is_file() and item.suffix.lower() in IMAGE_EXTENSIONS
+            if item.is_file() and item.suffix.lower() in MEDIA_EXTENSIONS
         ),
         key=lambda item: item.stat().st_mtime,
     )
@@ -470,7 +473,9 @@ def append_excel_row(info: dict[str, str], excel_path: Path, log) -> None:
 def process_image(detector, image_path: Path, current_session: dict | None,
                    photo_dir: Path, backup_dir: Path, excel_path: Path, log,
                    use_pyzbar: bool = False) -> dict | None:
-    payload = decode_qr(detector, image_path, use_pyzbar)
+    # 동영상에는 QR이 찍히지 않으므로 검사 없이 곧바로 분류만 한다.
+    is_video = image_path.suffix.lower() in VIDEO_EXTENSIONS
+    payload = None if is_video else decode_qr(detector, image_path, use_pyzbar)
 
     if payload:
         info = parse_session_payload(payload)
