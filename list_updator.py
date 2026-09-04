@@ -213,7 +213,7 @@ def update_excel(target_dir: Path, excel_path: Path, log) -> int:
 
         # E~N열: 경과일 계산 수식 및 촬영여부
         r = current_row
-        ws.cell(row=r, column=5, value=f"=C{r}+7").number_format = "yyyy-mm-dd"
+        ws.cell(row=r, column=5, value=f"=C{r}").number_format = "yyyy-mm-dd"
         ws.cell(row=r, column=6, value="")
         ws.cell(row=r, column=7, value=f"=C{r}+14").number_format = "yyyy-mm-dd"
         ws.cell(row=r, column=8, value="")

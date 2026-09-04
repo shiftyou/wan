@@ -444,7 +444,7 @@ def append_excel_row(info: dict[str, str], excel_path: Path, log) -> None:
 
         ws.cell(row=row, column=4, value=info["수술명"])
 
-        ws.cell(row=row, column=5, value=f"=C{row}+7").number_format = "yyyy-mm-dd"
+        ws.cell(row=row, column=5, value=f"=C{row}").number_format = "yyyy-mm-dd"
         ws.cell(row=row, column=6, value="")
         ws.cell(row=row, column=7, value=f"=C{row}+14").number_format = "yyyy-mm-dd"
         ws.cell(row=row, column=8, value="")
